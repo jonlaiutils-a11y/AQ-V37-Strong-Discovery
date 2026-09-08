@@ -1,5 +1,5 @@
-// AQ V37.4 Discovery Beta1 — 强势发现 + 风险过滤 + 实盘确认
-// 核心原则：主动发现强股 + 不追直线 + 买点确认 + 次日/3日延续 + 风险撤销
+// AQ Extreme v1.0 — 极端行情短线模型
+// 核心原则：逆势选股 + 尾盘确认 + 次日必出 + 极小仓位
 
 const CORS = {
   "content-type": "application/json; charset=utf-8",
@@ -211,16 +211,9 @@ function contraPick(x, market) {
   const target1 = price * 1.05;  // +5%就跑
   const target2 = price * 1.08;  // +8%强目标
 
-  const grade = score >= 90 ? "S" : score >= 82 ? "A+" : score >= 75 ? "A" : score >= 68 ? "B" : "C";
-  const stage = pullback <= 1.2 && pos >= 0.65 ? "强势承接" : pullback <= 2.2 ? "突破后整理" : "观察";
-  const nextDayStrength = Math.max(0, Math.min(100, Math.round(score * 0.72 + (pos * 100) * 0.18 + (mainNet > 0 ? 8 : -8))));
-  const threeDayStrength = Math.max(0, Math.min(100, Math.round(score * 0.68 + (vr >= 1 && vr <= 4 ? 10 : 0) + (turnover >= 2 && turnover <= 12 ? 8 : 0))));
-  const cancelBuy = +(Math.max(low, buyLow * 0.992)).toFixed(2);
-
   return {
     ...x,
-    score, grade, stage, decision, action, riskLevel,
-    nextDayStrength, threeDayStrength, cancelBuy,
+    score, decision, action, riskLevel,
     isContra, isStrongContra,
     dayRange: +dayRange.toFixed(2),
     pullback: +pullback.toFixed(2),
@@ -261,7 +254,7 @@ async function scanMarket(context) {
 
   const body = {
     ok: true,
-    version: "AQ-V37.4-Discovery-Beta1",
+    version: "aq-extreme-v1.0",
     time: new Date().toISOString(),
     market,
     strongContra: strongContra.map((x, i) => ({ ...x, rank: i + 1 })),
@@ -303,7 +296,7 @@ export async function onRequestGet(context) {
   const url = new URL(context.request.url);
   try {
     if (url.searchParams.get("health") === "1") {
-      return resp({ ok: true, service: "AQ-V37.4-Discovery-Beta1", time: new Date().toISOString(), kvEnabled: !!getKv(context) });
+      return resp({ ok: true, service: "aq-extreme-v1.0", time: new Date().toISOString(), kvEnabled: !!getKv(context) });
     }
     if (url.searchParams.get("mode") === "scan") {
       return await scanMarket(context);
