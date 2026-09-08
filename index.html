@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>AQ V37.4 强势发现 Beta1</title>
+<title>AQ V37.5 强势发现 Beta2</title>
 <style>
 :root{--bg:#0a0f1a;--panel:#111827;--panel2:#1a2332;--line:#1f2937;--text:#e5e7eb;--muted:#9ca3af;--blue:#3b82f6;--green:#10b981;--red:#ef4444;--yellow:#f59e0b;--orange:#f97316;--purple:#a855f7}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",Arial,sans-serif;line-height:1.6}
@@ -65,12 +65,14 @@ input{width:110px}
 .tab.active{background:var(--blue);border-color:var(--blue);color:#fff}
 .panel{display:none}.panel.active{display:block}
 .log{font-size:12px;color:var(--muted);padding:10px;background:var(--bg);border-radius:8px;margin-top:10px}
+
+.signal{display:inline-block;padding:4px 10px;border-radius:999px;font-weight:800;font-size:12px}.signal-buy{background:rgba(16,185,129,.22);color:#6ee7b7}.signal-wait{background:rgba(59,130,246,.20);color:#93c5fd}.signal-break{background:rgba(168,85,247,.20);color:#d8b4fe}.signal-no{background:rgba(239,68,68,.18);color:#fca5a5}.grade{font-weight:900}.grade-S{color:#fbbf24}.grade-Ap{color:#d8b4fe}.grade-A{color:#93c5fd}
 </style>
 </head>
 <body>
 <header>
-  <h1>🚀 AQ V37.4 强势发现 Beta1</h1>
-  <div class="sub">全市场活跃池扫描 · 强势过滤 · 买点确认 · 次日/3日跟踪</div>
+  <h1>🚀 AQ V37.5 强势发现 Beta2</h1>
+  <div class="sub">全市场分批扫描 · 稀缺评分 · 买点过滤 · 次日/3日延续</div>
 </header>
 <div class="wrap">
 
@@ -95,14 +97,14 @@ input{width:110px}
 </div>
 
 <div class="card">
-  <h2>💜 逆势强势股（重点关注）</h2>
+  <h2>💜 强势交易候选（按买点过滤）</h2>
   <div id="strongContra">
-    <div class="empty">点击"扫描逆势股"获取逆势强势股</div>
+    <div class="empty">点击"扫描全市场"获取逆势强势股</div>
   </div>
 </div>
 
 <div class="card">
-  <h2>🟢 抗跌观察池</h2>
+  <h2>🟢 观察池（未触发买点）</h2>
   <div id="microContra">
     <div class="empty">等待扫描...</div>
   </div>
@@ -128,7 +130,7 @@ input{width:110px}
 <div class="card">
   <h2>⚙️ 操作</h2>
   <div class="row">
-    <button class="purple" onclick="scanMarket()" id="scanBtn">🔍 扫描逆势股</button>
+    <button class="purple" onclick="scanMarket()" id="scanBtn">🔍 扫描全市场</button>
     <select id="refreshInterval">
       <option value="0">手动刷新</option>
       <option value="60">1分钟</option>
@@ -143,7 +145,7 @@ input{width:110px}
 </div>
 
 <script>
-const API = new URL("/quote", window.location.origin).toString();
+const API = new URL("/api/quote", window.location.origin).toString();
 const K_WATCH = "aq_extreme_watch_v1";
 let autoTimer = null;
 let lastData = null;
@@ -161,7 +163,7 @@ setInterval(() => {
   const hint = document.getElementById("timeHint");
   if (h === 9 && m < 30) hint.innerHTML = `⏰ 当前时间：<b>${h}:${m<10?'0'+m:m}</b> &nbsp;|&nbsp; <b style="color:var(--yellow)">集合竞价阶段，不建议操作</b>`;
   else if (h < 14 || (h === 14 && m < 30)) hint.innerHTML = `⏰ 当前时间：<b>${h}:${m<10?'0'+m:m}</b> &nbsp;|&nbsp; <b style="color:var(--yellow)">盘中时段，建议只观察不操作，等14:30后</b>`;
-  else if (h >= 14 && h < 15) hint.innerHTML = `⏰ 当前时间：<b>${h}:${m<10?'0'+m:m}</b> &nbsp;|&nbsp; <b style="color:var(--green)">尾盘确认时段，可扫描逆势股</b>`;
+  else if (h >= 14 && h < 15) hint.innerHTML = `⏰ 当前时间：<b>${h}:${m<10?'0'+m:m}</b> &nbsp;|&nbsp; <b style="color:var(--green)">尾盘确认时段，可扫描全市场</b>`;
   else hint.innerHTML = `⏰ 当前时间：<b>${h}:${m<10?'0'+m:m}</b> &nbsp;|&nbsp; 已收盘，准备次日计划`;
 }, 1000);
 
@@ -197,40 +199,26 @@ function renderMarket(m) {
 function renderStrong(items) {
   const box = document.getElementById("strongContra");
   if (!items || !items.length) {
-    box.innerHTML = `<div class="empty">当前没有逆势强势股。<br><b>空仓等待是正确选择，不要硬找票买。</b></div>`;
+    box.innerHTML = `<div class="empty">❌ 今日没有达到交易标准的候选。<br><b>不为凑Top而买，空仓也是信号。</b></div>`;
     return;
   }
+  const sigClass = v => v==='买入'?'signal-buy':v==='等回踩买'?'signal-wait':v==='突破后买'?'signal-break':'signal-no';
+  const gradeClass = g => g==='S'?'grade-S':g==='A+'?'grade-Ap':'grade-A';
   box.innerHTML = items.map((x, i) => `
     <div class="stock-card strong">
       <div class="stock-header">
         <div><span class="stock-name">${esc(x.name)}</span> <span class="stock-code">${x.code}</span></div>
-        <div class="stock-tags">
-          <span class="tag tag-strong">逆势强 #${i+1}</span>
-          <span class="tag tag-info">评分${x.score}</span>
-          <span class="tag ${x.rise>=0?'tag-contra':'tag-avoid'}">${x.rise>=0?'+'+fmt(x.rise):fmt(x.rise)}%</span>
-        </div>
+        <div class="stock-tags"><span class="signal ${sigClass(x.signal)}">${esc(x.signal)}</span><span class="tag tag-strong">#${i+1}</span><span class="tag tag-info grade ${gradeClass(x.grade)}">${esc(x.grade)} · ${x.score}</span><span class="tag ${x.rise>=0?'tag-contra':'tag-avoid'}">${x.rise>=0?'+':''}${fmt(x.rise)}%</span></div>
       </div>
       <div class="score-row">
-        <span class="score-pill">涨幅 <b class="${x.rise>=0?'up':'down'}">${fmt(x.rise)}%</b></span>
-        <span class="score-pill">换手 <b>${fmt(x.turnover)}%</b></span>
-        <span class="score-pill">量比 <b>${fmt(x.vr)}</b></span>
-        <span class="score-pill">主力 <b>${x.mainNet>0?'+':''}${fmt(x.mainNet)}亿</b></span>
-        <span class="score-pill">日内位置 <b>${fmt(x.pos*100,0)}%</b></span>
+        <span class="score-pill">次日模型 <b>${fmt(x.nextDayProb,0)}%</b></span><span class="score-pill">3日模型 <b>${fmt(x.threeDayProb,0)}%</b></span><span class="score-pill">剩余空间 <b>${fmt(x.remaining,1)}%</b></span><span class="score-pill">主力 <b>${x.mainNet>0?'+':''}${fmt(x.mainNet)}亿</b></span><span class="score-pill">日内位置 <b>${fmt(x.pos*100,0)}%</b></span>
       </div>
       <div class="price-grid">
-        <div class="price-item buy"><div class="label">买入区间</div><div class="value">${fmt(x.buyLow)}~${fmt(x.buyHigh)}</div></div>
-        <div class="price-item stop"><div class="label">止损-3%</div><div class="value">${fmt(x.stopLoss)}</div></div>
-        <div class="price-item target"><div class="label">目标+5%</div><div class="value">${fmt(x.target1)}</div></div>
-        <div class="price-item target"><div class="label">强目标+8%</div><div class="value">${fmt(x.target2)}</div></div>
+        <div class="price-item buy"><div class="label">买入区</div><div class="value">${fmt(x.buyLow)}~${fmt(x.buyHigh)}</div></div><div class="price-item stop"><div class="label">撤销买点</div><div class="value">${fmt(x.cancelBuy)}</div></div><div class="price-item stop"><div class="label">硬止损</div><div class="value">${fmt(x.stopLoss)}</div></div><div class="price-item target"><div class="label">第一目标</div><div class="value">${fmt(x.target1)}</div></div>
       </div>
-      <div class="alert-box strong" style="margin-top:8px">
-        <b>操作：</b>${esc(x.action)}<br>
-        <b>纪律：</b>尾盘14:30后若股价仍在买入区间内且不破分时均线，可极小仓（≤10%资金）试错。次日不涨停就走。
-      </div>
-    </div>
-  `).join("");
+      <div class="alert-box strong" style="margin-top:8px"><b>操作：</b>${esc(x.action)}<br><b>风险：</b>${esc(x.riskLevel)} ｜ 量比${fmt(x.vr)} ｜ 换手${fmt(x.turnover)}% ｜ 回撤${fmt(x.pullback)}%</div>
+    </div>`).join("");
 }
-
 function renderMicro(items) {
   const box = document.getElementById("microContra");
   if (!items || !items.length) { box.innerHTML = `<div class="empty">暂无抗跌观察标的</div>`; return; }
@@ -239,12 +227,12 @@ function renderMicro(items) {
       <div class="stock-header">
         <div><span class="stock-name">${esc(x.name)}</span> <span class="stock-code">${x.code}</span></div>
         <div class="stock-tags">
-          <span class="tag tag-contra">抗跌</span>
+          <span class="tag tag-contra">${esc(x.signal||"观察")}</span>
           <span class="tag tag-info">${esc(x.sector||"其他")}</span>
         </div>
       </div>
       <div style="font-size:13px;color:var(--muted);margin-top:6px">
-        现价${fmt(x.price)} | 涨幅<span class="${x.rise>=0?'up':'down'}">${fmt(x.rise)}%</span> | 评分${x.score} | ${esc(x.action)}
+        现价${fmt(x.price)} | 涨幅<span class="${x.rise>=0?'up':'down'}">${fmt(x.rise)}%</span> | ${esc(x.grade||"C")}级 ${x.score}分 | 次日模型${fmt(x.nextDayProb,0)}% | ${esc(x.action)}
       </div>
     </div>
   `).join("");
@@ -347,7 +335,7 @@ async function scanMarket() {
   const btn = document.getElementById("scanBtn");
   btn.disabled = true;
   btn.textContent = "扫描中...";
-  log("开始扫描逆势股...");
+  log("开始分批扫描全市场...");
   try {
     const r = await fetch(API + "?mode=scan&t=" + Date.now(), { cache: "no-store" });
     const d = await r.json();
@@ -357,12 +345,12 @@ async function scanMarket() {
     renderStrong(d.strongContra);
     renderMicro(d.microContra);
     const s = d.strongContra || [];
-    log(`扫描完成：${d.scanned}只中筛选出逆势强${s.length}只。大盘风险${d.market.risk}。`);
+    log(`扫描完成：覆盖${d.scanned}只，交易候选${s.length}只。大盘风险${d.market.risk}。${d.stale?"（缓存数据）":""}`);
   } catch (e) {
     log("扫描失败：" + e.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = "🔍 扫描逆势股";
+    btn.textContent = "🔍 扫描全市场";
   }
 }
 
