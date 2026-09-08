@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>AQ 极端行情短线版 v1.0</title>
+<title>AQ V37.4 强势发现 Beta1</title>
 <style>
 :root{--bg:#0a0f1a;--panel:#111827;--panel2:#1a2332;--line:#1f2937;--text:#e5e7eb;--muted:#9ca3af;--blue:#3b82f6;--green:#10b981;--red:#ef4444;--yellow:#f59e0b;--orange:#f97316;--purple:#a855f7}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",Arial,sans-serif;line-height:1.6}
@@ -70,7 +70,7 @@ input{width:110px}
 <body>
 <header>
   <h1>🚀 AQ V37.4 强势发现 Beta1</h1>
-  <div class="sub">全市场活跃池发现 · 强势过滤 · 买点确认 · 次日/3日强度</div>
+  <div class="sub">全市场活跃池扫描 · 强势过滤 · 买点确认 · 次日/3日跟踪</div>
 </header>
 <div class="wrap">
 
@@ -143,7 +143,7 @@ input{width:110px}
 </div>
 
 <script>
-const API = "/api/quote";
+const API = new URL("/api/quote", window.location.origin).toString();
 const K_WATCH = "aq_extreme_watch_v1";
 let autoTimer = null;
 let lastData = null;
