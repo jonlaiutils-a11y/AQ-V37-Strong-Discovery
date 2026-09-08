@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>AQ 极端行情短线版 v1.0</title>
+<style>
+:root{--bg:#0a0f1a;--panel:#111827;--panel2:#1a2332;--line:#1f2937;--text:#e5e7eb;--muted:#9ca3af;--blue:#3b82f6;--green:#10b981;--red:#ef4444;--yellow:#f59e0b;--orange:#f97316;--purple:#a855f7}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",Arial,sans-serif;line-height:1.6}
+header{position:sticky;top:0;z-index:30;background:#0d1320;border-bottom:1px solid var(--line);padding:14px 16px}
+h1{font-size:20px;margin:0 0 4px;color:#fff}.sub{font-size:12px;color:var(--muted)}
+.wrap{padding:14px;max-width:900px;margin:0 auto}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+.card h2{font-size:16px;margin:0 0 12px;color:#fff}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button,select,input{border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:#fff;padding:8px 12px;font-size:14px;cursor:pointer}
+button:hover{opacity:.9}button.primary{background:var(--blue);border-color:var(--blue)}button.green{background:var(--green);border-color:var(--green)}button.red{background:var(--red);border-color:var(--red)}button.purple{background:var(--purple);border-color:var(--purple)}
+input{width:110px}
+.panic-banner{background:linear-gradient(90deg,rgba(239,68,68,.15),rgba(185,28,28,.2));border:1px solid rgba(239,68,68,.4);border-radius:12px;padding:14px 16px;margin-bottom:14px;text-align:center}
+.panic-banner h3{margin:0 0 6px;color:#fca5a5;font-size:16px}
+.panic-banner p{margin:0;color:#fecaca;font-size:13px}
+.market-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px}
+.mbox{background:var(--panel2);border-radius:10px;padding:10px;text-align:center;border:1px solid var(--line)}
+.mbox .label{font-size:11px;color:var(--muted)}
+.mbox .value{font-size:20px;font-weight:800;margin-top:2px}
+.mbox.red{border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.06)}
+.mbox.green{border-color:rgba(16,185,129,.4);background:rgba(16,185,129,.06)}
+.discipline{background:var(--panel2);border-left:3px solid var(--red);padding:12px 14px;border-radius:8px;font-size:13px;margin-bottom:14px}
+.discipline b{color:#fca5a5}
+.discipline.ok{border-left-color:var(--green)}
+.discipline.ok b{color:#86efac}
+.time-hint{background:var(--panel2);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--muted);text-align:center;margin-bottom:14px}
+.time-hint b{color:var(--yellow)}
+.stock-card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px;transition:border-color .2s}
+.stock-card:hover{border-color:#374151}
+.stock-card.strong{border-color:var(--purple);background:rgba(168,85,247,.04)}
+.stock-card.avoid{border-color:var(--red);background:rgba(239,68,68,.04)}
+.stock-header{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.stock-name{font-size:17px;font-weight:700;color:#fff}
+.stock-code{font-size:13px;color:var(--muted);font-weight:400}
+.stock-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.tag{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700}
+.tag-strong{background:rgba(168,85,247,.2);color:#d8b4fe}
+.tag-contra{background:rgba(16,185,129,.2);color:#6ee7b7}
+.tag-avoid{background:rgba(239,68,68,.2);color:#fca5a5}
+.tag-info{background:rgba(59,130,246,.15);color:#93c5fd}
+.score-row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.score-pill{background:var(--bg);border-radius:8px;padding:6px 12px;font-size:12px}
+.score-pill b{font-size:14px}
+.price-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;margin-top:10px}
+.price-item{background:var(--bg);border-radius:8px;padding:8px 10px;text-align:center}
+.price-item .label{font-size:11px;color:var(--muted)}
+.price-item .value{font-size:15px;font-weight:700;margin-top:2px}
+.price-item.stop{color:var(--red)}
+.price-item.target{color:var(--green)}
+.price-item.buy{color:var(--blue)}
+.alert-box{margin-top:10px;padding:10px 12px;border-radius:8px;font-size:13px;font-weight:600}
+.alert-box.risk-high{background:rgba(239,68,68,.12);color:#fca5a5;border:1px solid rgba(239,68,68,.3)}
+.alert-box.info{background:rgba(59,130,246,.1);color:#93c5fd;border:1px solid rgba(59,130,246,.3)}
+.alert-box.strong{background:rgba(168,85,247,.1);color:#d8b4fe;border:1px solid rgba(168,85,247,.3)}
+.empty{text-align:center;padding:30px;color:var(--muted);font-size:14px}
+@media(max-width:600px){.market-grid{grid-template-columns:repeat(2,1fr)}.price-grid{grid-template-columns:repeat(2,1fr)}}
+.tabs{display:flex;gap:6px;overflow:auto;margin-bottom:14px;padding-bottom:4px}
+.tab{background:transparent;border:1px solid var(--line);color:var(--muted)}
+.tab.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.panel{display:none}.panel.active{display:block}
+.log{font-size:12px;color:var(--muted);padding:10px;background:var(--bg);border-radius:8px;margin-top:10px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🚀 AQ V37.4 强势发现 Beta1</h1>
+  <div class="sub">全市场活跃池发现 · 强势过滤 · 买点确认 · 次日/3日强度</div>
+</header>
+<div class="wrap">
+
+<div class="panic-banner" id="panicBanner" style="display:none">
+  <h3>🚨 当前处于极端恐慌行情</h3>
+  <p id="panicText">建议完全空仓观望，只看不买</p>
+</div>
+
+<div class="card" id="marketCard" style="display:none">
+  <h2>🌩️ 市场环境</h2>
+  <div class="market-grid" id="marketGrid"></div>
+  <div class="alert-box" id="marketAdvice"></div>
+</div>
+
+<div class="discipline" id="disciplineBox">
+  <b>📋 极端行情铁律：</b><br>
+  ① 总资金只用 <b>10%-20%</b> 试错 &nbsp;② 只做 <b>14:30后</b> 尾盘确认 &nbsp;③ <b>次日不涨停就走</b>，不格局 &nbsp;④ 硬止损 <b>-3%</b>，不补仓 &nbsp;⑤ 单票仓位 <b>≤10%</b> &nbsp;⑥ 没有逆势强股就<b>空仓</b>
+</div>
+
+<div class="time-hint" id="timeHint">
+  ⏰ 当前时间：<b id="clock">--:--</b> &nbsp;|&nbsp; 建议操作时段：<b>14:30 - 15:00</b>（尾盘确认，避开上午恐慌）
+</div>
+
+<div class="card">
+  <h2>💜 逆势强势股（重点关注）</h2>
+  <div id="strongContra">
+    <div class="empty">点击"扫描逆势股"获取逆势强势股</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>🟢 抗跌观察池</h2>
+  <div id="microContra">
+    <div class="empty">等待扫描...</div>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" data-panel="watchPanel">⭐ 自选/持仓</button>
+</div>
+<div id="watchPanel" class="panel active">
+  <div class="card">
+    <div class="row">
+      <input id="watchCode" placeholder="6位代码">
+      <input id="watchCost" placeholder="成本价">
+      <input id="watchPct" placeholder="仓位%">
+      <button class="primary" onclick="addWatch()">添加</button>
+      <button onclick="refreshWatch()">刷新</button>
+      <button class="red" onclick="clearWatch()">清空</button>
+    </div>
+    <div id="watchList" style="margin-top:12px"></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>⚙️ 操作</h2>
+  <div class="row">
+    <button class="purple" onclick="scanMarket()" id="scanBtn">🔍 扫描逆势股</button>
+    <select id="refreshInterval">
+      <option value="0">手动刷新</option>
+      <option value="60">1分钟</option>
+      <option value="180">3分钟</option>
+      <option value="300">5分钟</option>
+    </select>
+    <button onclick="toggleAuto()" id="autoBtn">开启自动</button>
+  </div>
+  <div class="log" id="logBox">系统就绪。当前建议：等待14:30后扫描，只做尾盘确认。</div>
+</div>
+
+</div>
+
+<script>
+const API = "/api/quote";
+const K_WATCH = "aq_extreme_watch_v1";
+let autoTimer = null;
+let lastData = null;
+
+function read(k, d = []) { try { const x = JSON.parse(localStorage.getItem(k) || "null"); return x ?? d; } catch { return d; } }
+function write(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
+function fmt(n, d = 2) { return (n == null || !Number.isFinite(Number(n))) ? "--" : Number(n).toFixed(d); }
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+function log(t) { document.getElementById("logBox").textContent = new Date().toLocaleTimeString("zh-CN") + " | " + t; }
+
+setInterval(() => {
+  const now = new Date();
+  document.getElementById("clock").textContent = now.toLocaleTimeString("zh-CN", {hour12:false});
+  const h = now.getHours(), m = now.getMinutes();
+  const hint = document.getElementById("timeHint");
+  if (h === 9 && m < 30) hint.innerHTML = `⏰ 当前时间：<b>${h}:${m<10?'0'+m:m}</b> &nbsp;|&nbsp; <b style="color:var(--yellow)">集合竞价阶段，不建议操作</b>`;
+  else if (h < 14 || (h === 14 && m < 30)) hint.innerHTML = `⏰ 当前时间：<b>${h}:${m<10?'0'+m:m}</b> &nbsp;|&nbsp; <b style="color:var(--yellow)">盘中时段，建议只观察不操作，等14:30后</b>`;
+  else if (h >= 14 && h < 15) hint.innerHTML = `⏰ 当前时间：<b>${h}:${m<10?'0'+m:m}</b> &nbsp;|&nbsp; <b style="color:var(--green)">尾盘确认时段，可扫描逆势股</b>`;
+  else hint.innerHTML = `⏰ 当前时间：<b>${h}:${m<10?'0'+m:m}</b> &nbsp;|&nbsp; 已收盘，准备次日计划`;
+}, 1000);
+
+function renderMarket(m) {
+  const card = document.getElementById("marketCard");
+  const grid = document.getElementById("marketGrid");
+  const advice = document.getElementById("marketAdvice");
+  const banner = document.getElementById("panicBanner");
+  const panicText = document.getElementById("panicText");
+  const disc = document.getElementById("disciplineBox");
+  if (!m) { card.style.display = "none"; banner.style.display = "none"; return; }
+  card.style.display = "block";
+  const upColor = m.up > m.down ? "green" : "";
+  const downColor = m.down > m.up ? "red" : "";
+  grid.innerHTML = `
+    <div class="mbox ${m.risk >= 70 ? 'red' : ''}"><div class="label">大盘风险</div><div class="value" style="color:${m.risk>=70?'var(--red)':m.risk<=40?'var(--green)':'var(--yellow)'}">${m.risk}</div></div>
+    <div class="mbox ${upColor}"><div class="label">上涨</div><div class="value" style="color:var(--red)">${m.up}</div></div>
+    <div class="mbox ${downColor}"><div class="label">下跌</div><div class="value" style="color:var(--green)">${m.down}</div></div>
+    <div class="mbox"><div class="label">跌停/涨停</div><div class="value" style="font-size:16px"><span style="color:var(--green)">${m.limitDown}</span>/<span style="color:var(--red)">${m.limitUp}</span></div></div>
+  `;
+  advice.className = "alert-box " + (m.risk >= 85 ? "risk-high" : m.risk >= 70 ? "risk-high" : "info");
+  advice.innerHTML = `<b>${m.status}</b> — ${m.advice}`;
+  if (m.isExtreme || m.isPanic) {
+    banner.style.display = "block";
+    panicText.textContent = m.isPanic ? "恐慌性抛售！建议完全空仓，只观望不操作。" : "市场极度弱势，逆势操作风险极高，请控制仓位≤10%。";
+    disc.className = "discipline";
+  } else {
+    banner.style.display = "none";
+    disc.className = "discipline ok";
+  }
+}
+
+function renderStrong(items) {
+  const box = document.getElementById("strongContra");
+  if (!items || !items.length) {
+    box.innerHTML = `<div class="empty">当前没有逆势强势股。<br><b>空仓等待是正确选择，不要硬找票买。</b></div>`;
+    return;
+  }
+  box.innerHTML = items.map((x, i) => `
+    <div class="stock-card strong">
+      <div class="stock-header">
+        <div><span class="stock-name">${esc(x.name)}</span> <span class="stock-code">${x.code}</span></div>
+        <div class="stock-tags">
+          <span class="tag tag-strong">逆势强 #${i+1}</span>
+          <span class="tag tag-info">评分${x.score}</span>
+          <span class="tag ${x.rise>=0?'tag-contra':'tag-avoid'}">${x.rise>=0?'+'+fmt(x.rise):fmt(x.rise)}%</span>
+        </div>
+      </div>
+      <div class="score-row">
+        <span class="score-pill">涨幅 <b class="${x.rise>=0?'up':'down'}">${fmt(x.rise)}%</b></span>
+        <span class="score-pill">换手 <b>${fmt(x.turnover)}%</b></span>
+        <span class="score-pill">量比 <b>${fmt(x.vr)}</b></span>
+        <span class="score-pill">主力 <b>${x.mainNet>0?'+':''}${fmt(x.mainNet)}亿</b></span>
+        <span class="score-pill">日内位置 <b>${fmt(x.pos*100,0)}%</b></span>
+      </div>
+      <div class="price-grid">
+        <div class="price-item buy"><div class="label">买入区间</div><div class="value">${fmt(x.buyLow)}~${fmt(x.buyHigh)}</div></div>
+        <div class="price-item stop"><div class="label">止损-3%</div><div class="value">${fmt(x.stopLoss)}</div></div>
+        <div class="price-item target"><div class="label">目标+5%</div><div class="value">${fmt(x.target1)}</div></div>
+        <div class="price-item target"><div class="label">强目标+8%</div><div class="value">${fmt(x.target2)}</div></div>
+      </div>
+      <div class="alert-box strong" style="margin-top:8px">
+        <b>操作：</b>${esc(x.action)}<br>
+        <b>纪律：</b>尾盘14:30后若股价仍在买入区间内且不破分时均线，可极小仓（≤10%资金）试错。次日不涨停就走。
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderMicro(items) {
+  const box = document.getElementById("microContra");
+  if (!items || !items.length) { box.innerHTML = `<div class="empty">暂无抗跌观察标的</div>`; return; }
+  box.innerHTML = items.map((x, i) => `
+    <div class="stock-card">
+      <div class="stock-header">
+        <div><span class="stock-name">${esc(x.name)}</span> <span class="stock-code">${x.code}</span></div>
+        <div class="stock-tags">
+          <span class="tag tag-contra">抗跌</span>
+          <span class="tag tag-info">${esc(x.sector||"其他")}</span>
+        </div>
+      </div>
+      <div style="font-size:13px;color:var(--muted);margin-top:6px">
+        现价${fmt(x.price)} | 涨幅<span class="${x.rise>=0?'up':'down'}">${fmt(x.rise)}%</span> | 评分${x.score} | ${esc(x.action)}
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderWatch() {
+  const list = read(K_WATCH);
+  const box = document.getElementById("watchList");
+  if (!list.length) { box.innerHTML = `<div class="empty">暂无自选</div>`; return; }
+  box.innerHTML = list.map((w, i) => `
+    <div class="stock-card" style="padding:10px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><b>${esc(w.name||w.code)}</b> <span style="color:var(--muted)">${w.code}</span>
+          ${w.cost?` | 成本${fmt(w.cost)} 仓位${fmt(w.pct,1)}%`:""}
+        </div>
+        <button class="red" style="padding:4px 10px;font-size:12px" onclick="removeWatch(${i})">删除</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+async function refreshWatch() {
+  const list = read(K_WATCH);
+  if (!list.length) return;
+  try {
+    const codes = list.map(w => w.code).join(",");
+    const r = await fetch(API + "?codes=" + encodeURIComponent(codes) + "&t=" + Date.now(), { cache: "no-store" });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    const map = new Map((d.items || []).map(x => [x.code, x]));
+    const box = document.getElementById("watchList");
+    box.innerHTML = list.map((w, i) => {
+      const x = map.get(w.code);
+      if (!x) return `<div class="stock-card">${w.code} — 数据获取失败</div>`;
+      const pnl = w.cost ? ((x.price - w.cost) / w.cost * 100) : null;
+      const isStop = w.cost && x.price <= w.cost * 0.97;
+      const isTarget = w.cost && x.price >= w.cost * 1.05;
+      return `
+        <div class="stock-card ${isStop?'avoid':isTarget?'strong':''}" style="padding:12px 14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+            <div>
+              <b>${esc(x.name)}</b> <span style="color:var(--muted)">${x.code}</span>
+              <span class="tag ${x.decision==='逆势强'?'tag-strong':x.decision==='抗跌'?'tag-contra':'tag-avoid'}">${x.decision}</span>
+            </div>
+            <button class="red" style="padding:4px 10px;font-size:12px" onclick="removeWatch(${i})">删除</button>
+          </div>
+          <div style="font-size:13px;margin-top:6px">
+            现价 <b>${fmt(x.price)}</b> | 涨幅 <span class="${x.rise>=0?'up':'down'}">${fmt(x.rise)}%</span>
+            ${w.cost ? `| 成本 <b>${fmt(w.cost)}</b> | 盈亏 <span class="${pnl>=0?'up':'down'}">${pnl>=0?'+':''}${fmt(pnl)}%</span>` : ""}
+          </div>
+          ${w.cost ? `
+          <div style="display:flex;gap:8px;margin-top:8px;font-size:12px">
+            <span style="color:var(--red)">止损: ${fmt(Math.min(w.cost*0.97, x.stopLoss||0))}</span>
+            <span style="color:var(--green)">+5%止盈: ${fmt(w.cost*1.05)}</span>
+            <span style="color:var(--green)">+8%止盈: ${fmt(w.cost*1.08)}</span>
+          </div>
+          ${isStop ? '<div class="alert-box risk-high" style="margin-top:6px">🚨 已触发-3%止损线！建议立即卖出，不补仓！</div>' : ''}
+          ${isTarget ? '<div class="alert-box strong" style="margin-top:6px">🎯 已达+5%目标位！建议减仓或止盈。</div>' : ''}
+          ` : ""}
+        </div>
+      `;
+    }).join("");
+    log("自选刷新成功");
+  } catch (e) { log("自选刷新失败：" + e.message); }
+}
+
+function addWatch() {
+  const code = document.getElementById("watchCode").value.trim();
+  const cost = Number(document.getElementById("watchCost").value);
+  const pct = Number(document.getElementById("watchPct").value);
+  if (!/^\d{6}$/.test(code)) { alert("请输入6位代码"); return; }
+  const list = read(K_WATCH);
+  const idx = list.findIndex(x => x.code === code);
+  if (idx >= 0) {
+    if (cost > 0) list[idx].cost = cost;
+    if (pct > 0) list[idx].pct = pct;
+  } else {
+    list.push({ code, name: "", cost: cost > 0 ? cost : null, pct: pct > 0 ? pct : null });
+  }
+  write(K_WATCH, list);
+  document.getElementById("watchCode").value = "";
+  document.getElementById("watchCost").value = "";
+  document.getElementById("watchPct").value = "";
+  renderWatch();
+  refreshWatch();
+}
+function removeWatch(i) {
+  const list = read(K_WATCH);
+  list.splice(i, 1);
+  write(K_WATCH, list);
+  renderWatch();
+}
+function clearWatch() {
+  if (!confirm("确定清空？")) return;
+  write(K_WATCH, []);
+  renderWatch();
+}
+
+async function scanMarket() {
+  const btn = document.getElementById("scanBtn");
+  btn.disabled = true;
+  btn.textContent = "扫描中...";
+  log("开始扫描逆势股...");
+  try {
+    const r = await fetch(API + "?mode=scan&t=" + Date.now(), { cache: "no-store" });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    lastData = d;
+    renderMarket(d.market);
+    renderStrong(d.strongContra);
+    renderMicro(d.microContra);
+    const s = d.strongContra || [];
+    log(`扫描完成：${d.scanned}只中筛选出逆势强${s.length}只。大盘风险${d.market.risk}。`);
+  } catch (e) {
+    log("扫描失败：" + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔍 扫描逆势股";
+  }
+}
+
+function toggleAuto() {
+  const btn = document.getElementById("autoBtn");
+  const sec = Number(document.getElementById("refreshInterval").value);
+  if (autoTimer) {
+    clearInterval(autoTimer);
+    autoTimer = null;
+    btn.textContent = "开启自动";
+    btn.className = "";
+    log("自动刷新已停止");
+  } else if (sec > 0) {
+    autoTimer = setInterval(() => { scanMarket(); refreshWatch(); }, sec * 1000);
+    btn.textContent = "停止自动";
+    btn.className = "red";
+    log(`自动刷新已开启：每${sec}秒`);
+  } else {
+    alert("请先选择刷新间隔");
+  }
+}
+
+renderWatch();
+log("系统就绪。建议：等待14:30后扫描，只做尾盘确认。股灾中空仓也是一种操作。");
+</script>
+</body>
+</html>
