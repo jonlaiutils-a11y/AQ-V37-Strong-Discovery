@@ -1,5 +1,5 @@
-// AQ V37.5 Strong Discovery Beta2
-// 全市场分批扫描 + 稀缺评分 + 买点过滤 + 次日/3日延续性（基于实时盘口/量价代理指标）
+// AQ V37.5 Strong Discovery Beta3 P0
+// 核心：AQ强度 + MQ买点质量 + HR追高风险 + ΔAQ强度变化 + T+1交易约束
 const CORS={"content-type":"application/json; charset=utf-8","access-control-allow-origin":"*","access-control-allow-methods":"GET,OPTIONS","cache-control":"no-store"};
 const resp=(x,s=200,h={})=>new Response(JSON.stringify(x),{status:s,headers:{...CORS,...h}});
 const num=v=>{const n=Number(v);return Number.isFinite(n)?n:0};
@@ -20,54 +20,115 @@ function normalize(x){return{code:String(x.f12||""),name:cleanName(x.f14),price:
 function allowed(x){return validCode(x.code)&&x.name&&x.price>0&&!/ST|退/.test(x.name)}
 function assessMarket(rows){const total=rows.length,up=rows.filter(r=>r.rise>0).length,down=rows.filter(r=>r.rise<0).length,flat=total-up-down,limitUp=rows.filter(r=>r.rise>=9.5).length,limitDown=rows.filter(r=>r.rise<=-9.5).length,totalAmount=rows.reduce((s,r)=>s+r.amount,0);const ratio=total?down/total:0;let risk=45;if(ratio>.8)risk=92;else if(ratio>.7)risk=82;else if(ratio>.6)risk=70;else if(ratio>.52)risk=58;else if(up>down*1.4)risk=35;if(limitDown>limitUp*2&&limitDown>20)risk+=6;risk=clamp(risk,0,100);const isExtreme=risk>=85,isPanic=risk>=92;return{risk,up,down,flat,limitUp,limitDown,totalAmount:Math.round(totalAmount),isExtreme,isPanic,status:risk>=85?"极度恐慌":risk>=70?"弱势下跌":risk>=55?"偏弱":risk<=40?"偏强":"震荡",advice:risk>=85?"🚨 风险极高：原则上空仓，只观察。":risk>=70?"⚠️ 弱势：只做极少数确认后的强势机会。":risk>=55?"📉 偏弱：控制仓位，优先回踩确认。":"市场可交易，但仍按买点纪律执行。"}}
 function grade(score){return score>=95?"S":score>=90?"A+":score>=85?"A":score>=75?"B":"C"}
-function scorePick(x,market){
-  if(x.amount<0.6||x.turnover>28||x.vr>12||x.rise<-2||x.rise>9.3)return null;
-  const dayRange=x.high>x.low?(x.high-x.low)/x.low*100:0,pullback=x.high>0?(x.high-x.price)/x.high*100:0,fromOpen=x.open>0?(x.price-x.open)/x.open*100:0,pos=x.high>x.low?(x.price-x.low)/(x.high-x.low):.5;
-  // 硬否决：冲高回落/高开低走/极端追高/明显资金流出
-  const chase=x.rise>=6.5||pos>.94&&x.rise>5;
+function strengthText(v){return v>=84?"极强":v>=74?"强":v>=62?"中":v>=50?"偏弱":"弱"}
+function calcMetrics(x,market){
+  if(x.amount<0.6||x.turnover>28||x.vr>12||x.rise<-2||x.rise>9.5)return null;
+  const dayRange=x.high>x.low?(x.high-x.low)/x.low*100:0;
+  const pullback=x.high>0?(x.high-x.price)/x.high*100:0;
+  const fromOpen=x.open>0?(x.price-x.open)/x.open*100:0;
+  const pos=x.high>x.low?(x.price-x.low)/(x.high-x.low):.5;
+  const chase=x.rise>=6.5||(pos>.94&&x.rise>5);
   const fade=pullback>2.8&&x.rise>2;
   const weakOpen=fromOpen<-1.5&&x.rise>0;
   const outflow=x.mainNet<-.35;
-  if(fade||weakOpen||outflow)return null;
-  let raw=54;
-  // 强度（最多14）
-  if(x.rise>=2&&x.rise<=5.8)raw+=14;else if(x.rise>=.5&&x.rise<2)raw+=8;else if(x.rise>5.8)raw+=5;else raw+=2;
-  // 量比（最多9）
-  if(x.vr>=1.2&&x.vr<=2.8)raw+=9;else if(x.vr>=.8&&x.vr<=4)raw+=5;else if(x.vr>5)raw-=5;
-  // 换手（最多8）
-  if(x.turnover>=2&&x.turnover<=10)raw+=8;else if(x.turnover>=1&&x.turnover<=15)raw+=4;else if(x.turnover>18)raw-=6;
-  // 日内结构（最多12）
-  if(pos>=.58&&pos<=.88)raw+=8;else if(pos>.88&&pos<=.94)raw+=3;else if(pos<.4)raw-=7;
-  if(pullback<=1.2)raw+=4;else if(pullback>2)raw-=4;
-  // 资金（最多10）
-  if(x.mainNet>=1)raw+=10;else if(x.mainNet>=.3)raw+=7;else if(x.mainNet>0)raw+=3;else raw-=3;
-  // 涨速（最多4，避免过度奖励）
-  if(x.speed>=.1&&x.speed<=1.2)raw+=4;else if(x.speed>2)raw-=3;
-  // 基本面底线（最多惩罚12）
-  if(x.peTTM<=0||x.peTTM>180)raw-=7;if(x.debtRatio>75)raw-=5;if(x.profitGrowth<-50)raw-=5;
-  // 追高惩罚
-  if(chase)raw-=10;if(x.rise>7.5)raw-=8;
-  // 市场风险惩罚：弱市不硬造S
-  raw-=market.risk>=85?8:market.risk>=70?5:market.risk>=55?2:0;
-  const score=clamp(Math.round(raw),0,100),g=grade(score);
-  // 概率为模型启发式估计，不是历史校准胜率
+
+  // AQ：股票强度，回答“是不是强股”
+  let aq=50;
+  if(x.rise>=1.2&&x.rise<=5.8)aq+=16; else if(x.rise>=.2&&x.rise<1.2)aq+=9; else if(x.rise>5.8)aq+=8; else aq+=2;
+  if(x.vr>=1.2&&x.vr<=3.2)aq+=10; else if(x.vr>=.8&&x.vr<=4.5)aq+=5; else if(x.vr>5)aq-=4;
+  if(x.turnover>=2&&x.turnover<=10)aq+=8; else if(x.turnover>=1&&x.turnover<=15)aq+=4; else if(x.turnover>18)aq-=6;
+  if(pos>=.58&&pos<=.9)aq+=10; else if(pos>.9)aq+=6; else if(pos<.38)aq-=8;
+  if(pullback<=1.2)aq+=5; else if(pullback>2.2)aq-=5;
+  if(x.mainNet>=1)aq+=11; else if(x.mainNet>=.3)aq+=7; else if(x.mainNet>0)aq+=3; else aq-=4;
+  if(x.speed>=.08&&x.speed<=1.2)aq+=5; else if(x.speed>2.2)aq-=2;
+  if(x.peTTM<=0||x.peTTM>180)aq-=5;if(x.debtRatio>75)aq-=4;if(x.profitGrowth<-50)aq-=4;
+  aq-=market.risk>=85?8:market.risk>=70?5:market.risk>=55?2:0;
+  aq=clamp(Math.round(aq),0,100);
+
+  // MQ：买点质量，回答“现在这个价格能不能买”
+  let mq=52;
+  // 承接/位置
+  if(pos>=.55&&pos<=.82)mq+=16; else if(pos>.82&&pos<=.9)mq+=10; else if(pos>.94)mq-=12; else if(pos<.4)mq-=8;
+  if(pullback>=.25&&pullback<=1.35)mq+=14; else if(pullback<.25&&x.rise>4)mq-=8; else if(pullback>2.2)mq-=10;
+  // 量价
+  if(x.vr>=1.15&&x.vr<=3.2)mq+=9; else if(x.vr>5)mq-=7;
+  if(x.turnover>=1.8&&x.turnover<=9.5)mq+=7; else if(x.turnover>16)mq-=7;
+  // 资金与速度
+  if(x.mainNet>=.5)mq+=9; else if(x.mainNet>0)mq+=4; else mq-=8;
+  if(x.speed>=.05&&x.speed<=.9)mq+=7; else if(x.speed>1.8)mq-=8;
+  // 当日涨幅越高，入场性价比越差
+  if(x.rise>=1&&x.rise<=4.8)mq+=8; else if(x.rise>6.5)mq-=14; else if(x.rise>5.2)mq-=7;
+  if(market.risk>=75)mq-=7; else if(market.risk<=40)mq+=3;
+  if(fade)mq-=18;if(weakOpen)mq-=10;if(outflow)mq-=16;
+  mq=clamp(Math.round(mq),0,100);
+
+  // HR：追高/冲高回落风险，越高越危险
+  let hr=22;
+  if(x.rise>5)hr+=12;if(x.rise>6.5)hr+=18;if(x.rise>8)hr+=10;
+  if(pos>.9)hr+=10;if(pos>.96)hr+=8;
+  if(pullback<.2&&x.rise>4)hr+=8;if(pullback>2.2&&x.rise>2)hr+=14;
+  if(x.speed>1.4)hr+=8;if(x.speed>2.2)hr+=8;
+  if(x.vr>4)hr+=7;if(x.turnover>14)hr+=7;
+  if(x.mainNet<0)hr+=10;if(fade)hr+=18;if(weakOpen)hr+=10;if(outflow)hr+=16;
+  if(market.risk>=75)hr+=8;
+  hr=clamp(Math.round(hr),0,100);
+
+  // 硬否决只针对买点，不把股票强度一票否决
+  const hardVeto=fade||weakOpen||outflow||hr>=82;
+  const buyQuality=mq>=85?"优秀":mq>=75?"良好":mq>=65?"一般":"差";
+  const chaseRisk=hr>=75?"高":hr>=50?"中":"低";
+  const todayEdge=(mq>=80&&hr<=42&&aq>=86)?"强":(mq>=68&&hr<=58&&aq>=80)?"中":"弱";
+
   const structure=clamp((pos-.35)*35,0,20)+clamp((2.5-pullback)*4,0,10);
   const flow=clamp(x.mainNet*3,0,10)+clamp((x.vr-.8)*4,0,8);
-  const nextDayProb=clamp(Math.round(43+(score-70)*.75+structure*.35+flow*.25-(x.rise>6?8:0)-(market.risk>70?5:0)),35,88);
-  const threeDayProb=clamp(Math.round(46+(score-70)*.65+structure*.25+flow*.2-(x.rise>7?8:0)-(market.risk>75?5:0)),35,85);
-  const remaining=clamp(5.8-x.rise*.45-pullback*.5+(score-80)*.06,0.5,6.5);
-  let signal="不买",decision="观察",action="等待更好结构",riskLevel="中高";
-  if(score>=95&&!chase&&pullback<=1.3&&pos>=.55&&pos<=.9&&x.mainNet>0){signal="买入";decision="S级机会";action="仅在买入区内、分时承接不破时小仓确认";riskLevel="中"}
-  else if(score>=90&&!chase){signal="等回踩买";decision="A+强候选";action="回踩买入区企稳后再买，不追直线";riskLevel="中"}
-  else if(score>=85){signal="突破后买";decision="A级候选";action="等突破确认或回踩承接，不满足则不买";riskLevel="中"}
-  else if(score>=75){signal="观察";decision="B级观察";action="暂不买，等待评分和结构同步增强";riskLevel="中高"}
-  if(chase){signal="不买";action="位置过高，禁止追涨；等回踩重新评估";riskLevel="高"}
-  if(market.risk>=85&&signal==="买入"){signal="等回踩买";action="市场风险过高，即使S级也只观察回踩确认"}
-  const pb=x.rise>=5?.018:x.rise>=3?.012:.009,buyHigh=x.price*(1-Math.max(.002,pb*.25)),buyLow=x.price*(1-pb),stopLoss=Math.max(x.price*.965,Math.min(x.low*.992,x.price*.975));
-  return{...x,score,grade:g,signal,decision,action,riskLevel,dayRange:+dayRange.toFixed(2),pullback:+pullback.toFixed(2),fromOpen:+fromOpen.toFixed(2),pos:+pos.toFixed(2),chase,nextDayProb,threeDayProb,remaining:+remaining.toFixed(1),buyHigh:+buyHigh.toFixed(2),buyLow:+buyLow.toFixed(2),cancelBuy:+(buyLow*.985).toFixed(2),stopLoss:+stopLoss.toFixed(2),target1:+(x.price*1.05).toFixed(2),target2:+(x.price*1.08).toFixed(2)}
+  const nextDayProb=clamp(Math.round(43+(aq-70)*.72+structure*.33+flow*.23-(x.rise>6?8:0)-(market.risk>70?5:0)),35,88);
+  const threeDayProb=clamp(Math.round(46+(aq-70)*.62+structure*.24+flow*.18-(x.rise>7?8:0)-(market.risk>75?5:0)),35,85);
+
+  // 买入区以当前价回踩比例为代理，追高票给更深的等待区
+  const pb=x.rise>=6?.022:x.rise>=4?.016:x.rise>=2?.011:.008;
+  const buyHigh=x.price*(1-Math.max(.002,pb*.28));
+  const buyLow=x.price*(1-pb);
+  const cancelBuy=buyLow*.985;
+  const stopLoss=Math.max(x.price*.965,Math.min(x.low*.992,x.price*.975));
+
+  let signal="观察",decision="观察",action="等待强度与买点同步增强",riskLevel=chaseRisk;
+  if(hardVeto){signal="不买";decision=aq>=88?"强股但禁止追":"风险过滤";action=fade?"冲高回落结构，撤销买点":outflow?"资金明显流出，撤销买点":weakOpen?"高开/冲高后走弱，不参与":"追高风险过高，等待回踩重评";}
+  else if(aq>=90&&mq>=82&&hr<=42){signal="可进";decision="S/A+可交易";action="仅在买入区内、承接不破时分批确认";riskLevel="低";}
+  else if(aq>=88&&mq>=72&&hr<=58){signal="等回踩";decision="强股等买点";action="股票强，但只等回踩承接，不追直线";}
+  else if(aq>=84&&mq>=68&&hr<=62){signal="突破确认";decision="强势备选";action="等突破确认或回踩后重新转强";}
+  else if(aq>=88&&mq<68){signal="不追";decision="强股但买点差";action="强度高但当前价格性价比差，等待新的买点";riskLevel=hr>=60?"高":"中";}
+  if(market.risk>=85&&signal==="可进"){signal="等回踩";decision="极端行情降级";action="市场风险过高，即使强股也只等确认";riskLevel="高";}
+
+  return{...x,score:aq,aq,mq,hr,grade:grade(aq),signal,decision,action,riskLevel,hardVeto,buyQuality,chaseRisk,todayEdge,dayRange:+dayRange.toFixed(2),pullback:+pullback.toFixed(2),fromOpen:+fromOpen.toFixed(2),pos:+pos.toFixed(2),chase,nextDayProb,threeDayProb,nextDayStrength:strengthText(nextDayProb),threeDayStrength:strengthText(threeDayProb),buyHigh:+buyHigh.toFixed(2),buyLow:+buyLow.toFixed(2),cancelBuy:+cancelBuy.toFixed(2),stopLoss:+stopLoss.toFixed(2),target1:+(x.price*1.05).toFixed(2),target2:+(x.price*1.08).toFixed(2)};
 }
 async function fetchPage(p,pz=500){const fs="m:0+t:6,m:0+t:80,m:1+t:2";const path="/api/qt/clist/get?pn="+p+"&pz="+pz+"&po=1&np=1&fltt=2&invt=2&fid=f6&fs="+encodeURIComponent(fs)+"&fields="+FIELDS;const r=await east(path);return(r.j?.data?.diff||[]).map(normalize).filter(allowed)}
-async function scanMarket(context){const started=Date.now();let pages=[];try{pages=await Promise.all(Array.from({length:12},(_,i)=>fetchPage(i+1,500)))}catch{pages=await Promise.all(Array.from({length:20},(_,i)=>fetchPage(i+1,200)))}const all=pages.flat(),unique=[...new Map(all.map(x=>[x.code,x])).values()],market=assessMarket(unique);let picks=unique.map(x=>scorePick(x,market)).filter(Boolean).sort((a,b)=>b.score-a.score||b.nextDayProb-a.nextDayProb||b.mainNet-a.mainNet);const trade=picks.filter(x=>["买入","等回踩买","突破后买"].includes(x.signal));const strong=trade.slice(0,8);const micro=picks.filter(x=>x.score>=75&&!trade.includes(x)).slice(0,8);const body={ok:true,version:"AQ-V37.5-Beta2",time:new Date().toISOString(),market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,30).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,coverage:"沪深A股分批扫描（排除688/北交所/ST/退市）",probabilityNote:"次日/3日概率为实时量价启发式模型估计，尚非历史回测校准胜率",elapsedMs:Date.now()-started};context.waitUntil(kvPutJson(context,KV_MARKET_KEY,body,86400));return resp(body,200,{"cache-control":"public, max-age=30"})}
-async function queryQuotes(url,context){const codes=[...new Set((url.searchParams.get("codes")||"").split(",").map(x=>x.trim()).filter(validCode))].slice(0,50);if(!codes.length)return resp({ok:false,error:"没有有效代码"},400);const live=[];for(let i=0;i<codes.length;i+=10){const chunk=codes.slice(i,i+10),path="/api/qt/ulist.np/get?fltt=2&np=1&invt=2&fields="+FIELDS+"&secids="+encodeURIComponent(chunk.map(secid).join(","));const{j}=await east(path);live.push(...(j?.data?.diff||[]).map(normalize).filter(allowed))}const market=(await kvGetJson(context,KV_MARKET_KEY))?.market||{risk:50};const items=live.map(x=>scorePick(x,market)||({...x,score:0,grade:"C",signal:"不买",decision:"不符合",action:"不参与"}));return resp({ok:true,time:new Date().toISOString(),count:items.length,items})}
+function applyDynamics(picks,previous){
+  const prevMap=new Map((previous?.allPicks||[]).map(x=>[x.code,x]));
+  return picks.map(x=>{
+    const p=prevMap.get(x.code);
+    const aqDelta=p&&Number.isFinite(Number(p.aq??p.score))?x.aq-Number(p.aq??p.score):0;
+    const flowDelta=p&&Number.isFinite(Number(p.mainNet))?x.mainNet-Number(p.mainNet):0;
+    const momentum=clamp(Math.round(50+aqDelta*5+flowDelta*8+x.speed*4),0,100);
+    const trend=aqDelta>=4?"↑↑":aqDelta>=1?"↑":aqDelta<=-4?"↓↓":aqDelta<=-1?"↓":"→";
+    // Top排序不只看“现在多强”，更看买点质量、追高风险和正在变强的速度
+    const tradeScore=clamp(Math.round(x.aq*.44+x.mq*.32+(100-x.hr)*.16+momentum*.08),0,100);
+    return{...x,aqDelta:+aqDelta.toFixed(1),flowDelta:+flowDelta.toFixed(2),momentum,trend,tradeScore};
+  });
+}
+async function scanMarket(context){
+  const started=Date.now();let pages=[];
+  try{pages=await Promise.all(Array.from({length:12},(_,i)=>fetchPage(i+1,500)))}catch{pages=await Promise.all(Array.from({length:20},(_,i)=>fetchPage(i+1,200)))}
+  const all=pages.flat(),unique=[...new Map(all.map(x=>[x.code,x])).values()],market=assessMarket(unique);
+  const previous=await kvGetJson(context,KV_MARKET_KEY);
+  let picks=unique.map(x=>calcMetrics(x,market)).filter(Boolean);
+  picks=applyDynamics(picks,previous).sort((a,b)=>b.tradeScore-a.tradeScore||b.momentum-a.momentum||b.aq-a.aq||b.mainNet-a.mainNet);
+  const trade=picks.filter(x=>["可进","等回踩","突破确认"].includes(x.signal)&&!x.hardVeto);
+  const strong=trade.slice(0,8);
+  const micro=picks.filter(x=>x.aq>=75&&!strong.some(s=>s.code===x.code)).slice(0,10);
+  const body={ok:true,version:"AQ-V37.5-Beta3-P0",time:new Date().toISOString(),market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,coverage:"沪深A股分批扫描（排除688/北交所/ST/退市）",probabilityNote:"次日/3日为实时量价启发式估计；交易指令以AQ强度、MQ买点质量、HR追高风险及ΔAQ变化共同决定。",elapsedMs:Date.now()-started};
+  context.waitUntil(kvPutJson(context,KV_MARKET_KEY,body,86400));
+  return resp(body,200,{"cache-control":"public, max-age=30"});
+}
+async function queryQuotes(url,context){const codes=[...new Set((url.searchParams.get("codes")||"").split(",").map(x=>x.trim()).filter(validCode))].slice(0,50);if(!codes.length)return resp({ok:false,error:"没有有效代码"},400);const live=[];for(let i=0;i<codes.length;i+=10){const chunk=codes.slice(i,i+10),path="/api/qt/ulist.np/get?fltt=2&np=1&invt=2&fields="+FIELDS+"&secids="+encodeURIComponent(chunk.map(secid).join(","));const{j}=await east(path);live.push(...(j?.data?.diff||[]).map(normalize).filter(allowed))}const cached=await kvGetJson(context,KV_MARKET_KEY),market=cached?.market||{risk:50};let items=live.map(x=>calcMetrics(x,market)||({...x,score:0,aq:0,mq:0,hr:100,grade:"C",signal:"不买",decision:"不符合",action:"不参与"}));items=applyDynamics(items,cached);return resp({ok:true,time:new Date().toISOString(),count:items.length,items})}
 export async function onRequestOptions(){return resp({ok:true})}
-export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V37.5-Beta2",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){cached.stale=true;cached.warning=e.message;return resp(cached,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
+export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V37.5-Beta3-P0",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){cached.stale=true;cached.warning=e.message;return resp(cached,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
