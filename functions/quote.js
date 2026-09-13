@@ -1,5 +1,5 @@
-// AQ V37.5 Strong Discovery Beta3 P0
-// 核心：AQ强度 + MQ买点质量 + HR追高风险 + ΔAQ强度变化 + T+1交易约束
+// AQ V37.5 Strong Discovery Beta3 P0.2
+// 核心：AQ强度 + MQ买点质量 + HR追高风险 + RR盈亏比 + ΔAQ强度变化 + T+1交易约束
 const CORS={"content-type":"application/json; charset=utf-8","access-control-allow-origin":"*","access-control-allow-methods":"GET,OPTIONS","cache-control":"no-store"};
 const resp=(x,s=200,h={})=>new Response(JSON.stringify(x),{status:s,headers:{...CORS,...h}});
 const num=v=>{const n=Number(v);return Number.isFinite(n)?n:0};
@@ -60,6 +60,18 @@ function calcMetrics(x,market){
   if(x.rise>=1&&x.rise<=4.8)mq+=8; else if(x.rise>6.5)mq-=14; else if(x.rise>5.2)mq-=7;
   if(market.risk>=75)mq-=7; else if(market.risk<=40)mq+=3;
   if(fade)mq-=18;if(weakOpen)mq-=10;if(outflow)mq-=16;
+
+  // RR：当前价到“当日突破位/压力位”与有效防守位的盈亏比代理。
+  // 仅用实时行情可得字段计算，不伪造日K压力；若距离当日高点太近且防守较远，MQ自动降级。
+  const pressure=x.high>0?x.high:x.price*1.02;
+  const defense=Math.max(x.low>0?x.low:x.price*.97, x.open>0?Math.min(x.open,x.price*.992):x.price*.97);
+  const upsidePct=Math.max(0,(pressure-x.price)/x.price*100);
+  const downsidePct=Math.max(.35,(x.price-defense)/x.price*100);
+  const rrRaw=upsidePct/downsidePct;
+  const rrScore=clamp(Math.round(35+rrRaw*30),20,95);
+  if(rrRaw>=1.5)mq+=8; else if(rrRaw>=1.0)mq+=4; else if(rrRaw<.55)mq-=12; else if(rrRaw<.8)mq-=6;
+  // 临近当日高点但尚未有效突破时，不把“强”误判成“好买点”
+  if(upsidePct<.7&&x.rise>1.5)mq-=6;
   mq=clamp(Math.round(mq),0,100);
 
   // HR：追高/冲高回落风险，越高越危险
@@ -71,6 +83,7 @@ function calcMetrics(x,market){
   if(x.vr>4)hr+=7;if(x.turnover>14)hr+=7;
   if(x.mainNet<0)hr+=10;if(fade)hr+=18;if(weakOpen)hr+=10;if(outflow)hr+=16;
   if(market.risk>=75)hr+=8;
+  if(rrRaw<.55&&x.rise>1.5)hr+=8;
   hr=clamp(Math.round(hr),0,100);
 
   // 硬否决只针对买点，不把股票强度一票否决
@@ -99,7 +112,7 @@ function calcMetrics(x,market){
   else if(aq>=88&&mq<68){signal="不追";decision="强股但买点差";action="强度高但当前价格性价比差，等待新的买点";riskLevel=hr>=60?"高":"中";}
   if(market.risk>=85&&signal==="可进"){signal="等回踩";decision="极端行情降级";action="市场风险过高，即使强股也只等确认";riskLevel="高";}
 
-  return{...x,score:aq,aq,mq,hr,grade:grade(aq),signal,decision,action,riskLevel,hardVeto,buyQuality,chaseRisk,todayEdge,dayRange:+dayRange.toFixed(2),pullback:+pullback.toFixed(2),fromOpen:+fromOpen.toFixed(2),pos:+pos.toFixed(2),chase,nextDayProb,threeDayProb,nextDayStrength:strengthText(nextDayProb),threeDayStrength:strengthText(threeDayProb),buyHigh:+buyHigh.toFixed(2),buyLow:+buyLow.toFixed(2),cancelBuy:+cancelBuy.toFixed(2),stopLoss:+stopLoss.toFixed(2),target1:+(x.price*1.05).toFixed(2),target2:+(x.price*1.08).toFixed(2)};
+  return{...x,score:aq,aq,mq,hr,rr:+rrRaw.toFixed(2),rrScore,pressure:+pressure.toFixed(2),defense:+defense.toFixed(2),upsidePct:+upsidePct.toFixed(2),downsidePct:+downsidePct.toFixed(2),grade:grade(aq),signal,decision,action,riskLevel,hardVeto,buyQuality,chaseRisk,todayEdge,dayRange:+dayRange.toFixed(2),pullback:+pullback.toFixed(2),fromOpen:+fromOpen.toFixed(2),pos:+pos.toFixed(2),chase,nextDayProb,threeDayProb,nextDayStrength:strengthText(nextDayProb),threeDayStrength:strengthText(threeDayProb),buyHigh:+buyHigh.toFixed(2),buyLow:+buyLow.toFixed(2),cancelBuy:+cancelBuy.toFixed(2),stopLoss:+stopLoss.toFixed(2),target1:+(x.price*1.05).toFixed(2),target2:+(x.price*1.08).toFixed(2)};
 }
 async function fetchPage(p,pz=500){const fs="m:0+t:6,m:0+t:80,m:1+t:2";const path="/api/qt/clist/get?pn="+p+"&pz="+pz+"&po=1&np=1&fltt=2&invt=2&fid=f6&fs="+encodeURIComponent(fs)+"&fields="+FIELDS;const r=await east(path);return(r.j?.data?.diff||[]).map(normalize).filter(allowed)}
 function applyDynamics(picks,previous){
@@ -116,8 +129,24 @@ function applyDynamics(picks,previous){
   });
 }
 async function scanMarket(context){
-  const started=Date.now();let pages=[];
-  try{pages=await Promise.all(Array.from({length:12},(_,i)=>fetchPage(i+1,500)))}catch{pages=await Promise.all(Array.from({length:20},(_,i)=>fetchPage(i+1,200)))}
+  const started=Date.now();
+  // Cloudflare Pages/Workers 对单次请求的外部 subrequest 数量有限。
+  // 旧版 12~20 个并发分页 + 行情源重试，容易直接触发 Too many subrequests。
+  // 改为“大页优先”：通常 1 次请求覆盖沪深市场；若上游限制大页，再用最多 3 页兜底。
+  let pages=[];
+  try{
+    const first=await fetchPage(1,6000);
+    pages=[first];
+    if(first.length<2500){
+      const p2=await fetchPage(2,2000);
+      const p3=await fetchPage(3,2000);
+      pages=[first,p2,p3];
+    }
+  }catch(e){
+    // 兜底仍严格控制 subrequest 数量，避免扫描本身把 Worker 配额打满。
+    pages=[];
+    for(let p=1;p<=3;p++) pages.push(await fetchPage(p,2000));
+  }
   const all=pages.flat(),unique=[...new Map(all.map(x=>[x.code,x])).values()],market=assessMarket(unique);
   const previous=await kvGetJson(context,KV_MARKET_KEY);
   let picks=unique.map(x=>calcMetrics(x,market)).filter(Boolean);
@@ -125,10 +154,10 @@ async function scanMarket(context){
   const trade=picks.filter(x=>["可进","等回踩","突破确认"].includes(x.signal)&&!x.hardVeto);
   const strong=trade.slice(0,8);
   const micro=picks.filter(x=>x.aq>=75&&!strong.some(s=>s.code===x.code)).slice(0,10);
-  const body={ok:true,version:"AQ-V37.5-Beta3-P0",time:new Date().toISOString(),market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,coverage:"沪深A股分批扫描（排除688/北交所/ST/退市）",probabilityNote:"次日/3日为实时量价启发式估计；交易指令以AQ强度、MQ买点质量、HR追高风险及ΔAQ变化共同决定。",elapsedMs:Date.now()-started};
+  const body={ok:true,version:"AQ-V37.5-Beta3-P0.2-RR-CF",time:new Date().toISOString(),market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,coverage:"沪深A股分批扫描（排除688/北交所/ST/退市）",probabilityNote:"次日/3日为实时量价启发式估计；交易指令以AQ强度、MQ买点质量、HR追高风险及ΔAQ变化共同决定。",elapsedMs:Date.now()-started};
   context.waitUntil(kvPutJson(context,KV_MARKET_KEY,body,86400));
   return resp(body,200,{"cache-control":"public, max-age=30"});
 }
 async function queryQuotes(url,context){const codes=[...new Set((url.searchParams.get("codes")||"").split(",").map(x=>x.trim()).filter(validCode))].slice(0,50);if(!codes.length)return resp({ok:false,error:"没有有效代码"},400);const live=[];for(let i=0;i<codes.length;i+=10){const chunk=codes.slice(i,i+10),path="/api/qt/ulist.np/get?fltt=2&np=1&invt=2&fields="+FIELDS+"&secids="+encodeURIComponent(chunk.map(secid).join(","));const{j}=await east(path);live.push(...(j?.data?.diff||[]).map(normalize).filter(allowed))}const cached=await kvGetJson(context,KV_MARKET_KEY),market=cached?.market||{risk:50};let items=live.map(x=>calcMetrics(x,market)||({...x,score:0,aq:0,mq:0,hr:100,grade:"C",signal:"不买",decision:"不符合",action:"不参与"}));items=applyDynamics(items,cached);return resp({ok:true,time:new Date().toISOString(),count:items.length,items})}
 export async function onRequestOptions(){return resp({ok:true})}
-export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V37.5-Beta3-P0",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){cached.stale=true;cached.warning=e.message;return resp(cached,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
+export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V37.5-Beta3-P0.2-RR-CF",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){cached.stale=true;cached.warning=e.message;return resp(cached,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
