@@ -1,4 +1,4 @@
-// AQ V37.5 Strong Discovery Beta3 P0.5.2 Safari/API Route Fix
+// AQ V37.5 Strong Discovery Beta3 P0.5.3 Stable Market Data Patch
 // 核心：AQ强度 + MQ买点质量 + HR追高风险 + ΔAQ强度变化 + T+1交易约束
 const CORS={"content-type":"application/json; charset=utf-8","access-control-allow-origin":"*","access-control-allow-methods":"GET,OPTIONS","cache-control":"no-store"};
 const resp=(x,s=200,h={})=>new Response(JSON.stringify(x),{status:s,headers:{...CORS,...h}});
@@ -12,7 +12,8 @@ async function kvGetJson(c,k){const kv=getKv(c);if(!kv)return null;try{const r=a
 async function kvPutJson(c,k,v,ttl){const kv=getKv(c);if(!kv)return false;try{await kv.put(k,JSON.stringify(v),ttl?{expirationTtl:ttl}:undefined);return true}catch{return false}}
 async function fetchText(url,timeout=9000){const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{const r=await fetch(url,{headers:{"user-agent":"Mozilla/5.0","referer":"https://quote.eastmoney.com/","accept":"application/json,text/plain,*/*"},signal:c.signal});const b=await r.arrayBuffer();if(!r.ok)throw new Error("HTTP "+r.status);return new TextDecoder("utf-8").decode(b)}finally{clearTimeout(t)}}
 function parseJsonLike(text){const s=String(text||"").trim();try{return JSON.parse(s)}catch{}const m=s.match(/\{[\s\S]*\}/);if(m)try{return JSON.parse(m[0])}catch{}throw new Error("无法解析返回内容")}
-const EAST_HOSTS=["https://82.push2.eastmoney.com","https://79.push2.eastmoney.com","https://99.push2.eastmoney.com","https://push2.eastmoney.com"];
+const EAST_HOSTS=["https://82.push2.eastmoney.com","https://80.push2.eastmoney.com","https://17.push2.eastmoney.com","https://29.push2.eastmoney.com","https://79.push2.eastmoney.com","https://99.push2.eastmoney.com","https://push2.eastmoney.com"];
+const EAST_UT="bd1d9ddb04089700cf9c27f6f7426281";
 async function east(path){let last="";for(const host of EAST_HOSTS){try{const j=parseJsonLike(await fetchText(host+path,8500));if(j?.data)return{j,source:host.replace(/^https?:\/\//,"")};last="空数据"}catch(e){last=e.message}}throw new Error(last||"行情源不可用")}
 const FIELDS="f12,f14,f2,f3,f4,f5,f6,f8,f10,f15,f16,f17,f18,f20,f21,f22,f33,f34,f35,f37,f38,f40,f41,f42,f43,f44,f45,f50,f51,f52,f62,f100";
 function cleanName(v){return String(v||"").replace(/[\u0000-\u001f]/g,"").trim()}
@@ -101,7 +102,7 @@ function calcMetrics(x,market){
 
   return{...x,score:aq,aq,mq,hr,grade:grade(aq),signal,decision,action,riskLevel,hardVeto,buyQuality,chaseRisk,todayEdge,dayRange:+dayRange.toFixed(2),pullback:+pullback.toFixed(2),fromOpen:+fromOpen.toFixed(2),pos:+pos.toFixed(2),chase,nextDayProb,threeDayProb,nextDayStrength:strengthText(nextDayProb),threeDayStrength:strengthText(threeDayProb),buyHigh:+buyHigh.toFixed(2),buyLow:+buyLow.toFixed(2),cancelBuy:+cancelBuy.toFixed(2),stopLoss:+stopLoss.toFixed(2),target1:+(x.price*1.05).toFixed(2),target2:+(x.price*1.08).toFixed(2)};
 }
-async function fetchPage(p,pz=500){const fs="m:0+t:6,m:0+t:80,m:1+t:2";const path="/api/qt/clist/get?pn="+p+"&pz="+pz+"&po=1&np=1&fltt=2&invt=2&fid=f6&fs="+encodeURIComponent(fs)+"&fields="+FIELDS;const r=await east(path);return(r.j?.data?.diff||[]).map(normalize).filter(allowed)}
+async function fetchPage(p,pz=500){const fs="m:0+t:6,m:0+t:80,m:1+t:2";const path="/api/qt/clist/get?pn="+p+"&pz="+pz+"&po=1&np=1&ut="+EAST_UT+"&fltt=2&invt=2&fid=f6&fs="+encodeURIComponent(fs)+"&fields="+FIELDS;const r=await east(path);return(r.j?.data?.diff||[]).map(normalize).filter(allowed)}
 function applyDynamics(picks,previous){
   const prevMap=new Map((previous?.allPicks||[]).map(x=>[x.code,x]));
   return picks.map(x=>{
@@ -117,28 +118,36 @@ function applyDynamics(picks,previous){
 }
 async function scanMarket(context){
   const started=Date.now(),pages=[],errors=[];
-  // P0.5：固定少量大页顺序拉取。单页失败不再让整次 Promise.all 失败，避免瞬时上游异常直接 502。
-  for(let p=1;p<=3;p++){
-    try{const rows=await fetchPage(p,2000);if(rows.length)pages.push(rows);else errors.push(`第${p}页空数据`)}
-    catch(e){errors.push(`第${p}页:${e.message||"失败"}`)}
+  // P0.5.3：东方财富大页(2000)在 Cloudflare 出口容易 502。改为 500/页串行抓取，
+  // 同时加入官方网页使用的公共 ut 参数；单页失败可继续，避免一次上游抖动拖垮整次扫描。
+  const pageSize=500,maxPages=12;
+  for(let p=1;p<=maxPages;p++){
+    try{
+      const rows=await fetchPage(p,pageSize);
+      if(rows.length){pages.push(rows);if(rows.length<pageSize)break;}
+      else {errors.push(`第${p}页空数据`);break;}
+    }catch(e){
+      errors.push(`第${p}页:${e.message||"失败"}`);
+      // 前3页都拿不到时继续打更多页没有意义，尽快进入缓存/明确失败。
+      if(p<=3&&pages.length===0)break;
+    }
   }
   const all=pages.flat(),unique=[...new Map(all.map(x=>[x.code,x])).values()];
-  // 数据量过低时宁可使用最近成功快照，也不把残缺样本伪装成全市场实时扫描。
+  // 沪深A股（排除688/ST/退市后）正常应远高于1200只。覆盖不足时禁止产生伪Top。
   if(unique.length<1200)throw new Error(`实时行情覆盖不足(${unique.length}只)${errors.length?"；"+errors.join("；"):""}`);
-  // 市场情绪继续使用全部有效A股，避免800亿过滤扭曲涨跌家数/风险判断。
   const market=assessMarket(unique);
   const previous=await kvGetJson(context,KV_MARKET_KEY);
-  // 用户规则：总市值>800亿元不进入选股池；市值缺失/异常也不参与推荐。
+  // 用户规则：总市值>800亿元不进入选股池；市场情绪仍按完整有效市场计算。
   const eligible=unique.filter(x=>x.totalCap>0&&x.totalCap<=800);
   let picks=eligible.map(x=>calcMetrics(x,market)).filter(Boolean);
   picks=applyDynamics(picks,previous).sort((a,b)=>b.tradeScore-a.tradeScore||b.momentum-a.momentum||b.aq-a.aq||b.mainNet-a.mainNet);
   const trade=picks.filter(x=>["可进","等回踩","突破确认"].includes(x.signal)&&!x.hardVeto);
   const strong=trade.slice(0,8);
   const micro=picks.filter(x=>x.aq>=75&&!strong.some(s=>s.code===x.code)).slice(0,10);
-  const body={ok:true,version:"AQ-V37.5-Beta3-P0.5.2",time:new Date().toISOString(),dataMode:errors.length?"degraded-live":"live",warning:errors.length?`部分行情页异常，已用有效实时数据完成扫描：${errors.join("；")}`:"",market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,eligibleScanned:eligible.length,excludedLargeCap:unique.filter(x=>x.totalCap>800).length,marketCapLimit:800,coverage:"沪深A股扫描（排除688/北交所/ST/退市；选股池总市值≤800亿元）",probabilityNote:"次日/3日为实时量价启发式估计；交易指令以AQ强度、MQ买点质量、HR追高风险及ΔAQ变化共同决定。",elapsedMs:Date.now()-started};
+  const body={ok:true,version:"AQ-V37.5-Beta3-P0.5.3",time:new Date().toISOString(),dataMode:errors.length?"degraded-live":"live",warning:errors.length?`部分行情页异常，已用有效实时数据完成扫描：${errors.join("；")}`:"",market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,eligibleScanned:eligible.length,excludedLargeCap:unique.filter(x=>x.totalCap>800).length,marketCapLimit:800,source:"Eastmoney push2 / 500-per-page + ut",coverage:"沪深A股扫描（排除688/北交所/ST/退市；选股池总市值≤800亿元）",probabilityNote:"次日/3日为实时量价启发式估计；交易指令以AQ强度、MQ买点质量、HR追高风险及ΔAQ变化共同决定。",elapsedMs:Date.now()-started};
   context.waitUntil(kvPutJson(context,KV_MARKET_KEY,body,86400));
   return resp(body,200,{"cache-control":"public, max-age=30"});
 }
 async function queryQuotes(url,context){const codes=[...new Set((url.searchParams.get("codes")||"").split(",").map(x=>x.trim()).filter(validCode))].slice(0,50);if(!codes.length)return resp({ok:false,error:"没有有效代码"},400);const live=[];for(let i=0;i<codes.length;i+=10){const chunk=codes.slice(i,i+10),path="/api/qt/ulist.np/get?fltt=2&np=1&invt=2&fields="+FIELDS+"&secids="+encodeURIComponent(chunk.map(secid).join(","));const{j}=await east(path);live.push(...(j?.data?.diff||[]).map(normalize).filter(allowed))}const cached=await kvGetJson(context,KV_MARKET_KEY),market=cached?.market||{risk:50};let items=live.map(x=>calcMetrics(x,market)||({...x,score:0,aq:0,mq:0,hr:100,grade:"C",signal:"不买",decision:"不符合",action:"不参与"}));items=applyDynamics(items,cached);return resp({ok:true,time:new Date().toISOString(),count:items.length,items})}
 export async function onRequestOptions(){return resp({ok:true})}
-export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V37.5-Beta3-P0.5.2",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){const fallback={...cached,stale:true,dataMode:"cache",warning:`实时行情异常，当前显示最近成功快照：${e.message||"接口异常"}`};return resp(fallback,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
+export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V37.5-Beta3-P0.5.3",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("health")==="upstream"){const rows=await fetchPage(1,5);return resp({ok:true,service:"AQ-V37.5-Beta3-P0.5.3",upstream:"Eastmoney",count:rows.length,time:new Date().toISOString()});}if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){const fallback={...cached,stale:true,dataMode:"cache",warning:`实时行情异常，当前显示最近成功快照：${e.message||"接口异常"}`};return resp(fallback,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
