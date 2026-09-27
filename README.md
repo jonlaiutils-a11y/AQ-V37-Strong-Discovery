@@ -1,12 +1,9 @@
-# AQ V37.5 Beta3 P0.5.1
+# AQ V37.5 Beta3 P0.5.2 Route Fix
 
-Hotfix for iPad/Safari scan failure.
-
-- Frontend API route fixed to literal `/api/quote` (no browser URL constructor).
-- Backend no longer uses URL constructor for static Eastmoney host labels.
-- Added explicit health check and clearer HTTP/JSON diagnostics.
-- Keeps P0.5 stable-data fallback and total market-cap filter: only stocks with total cap <= 800亿元 enter the selection pool.
-- Market breadth/risk still uses the full valid A-share scan.
+- Cloudflare Pages Function restored to `functions/quote.js`, matching route `/quote`.
+- Frontend uses literal relative path `/quote` (no Safari URL constructor).
+- Health check: `/quote?health=1`.
+- Market-cap pool limit remains <= 800亿元.
 - AQ/MQ/HR/RR/IM/TradeScore logic unchanged.
 
-Deploy the whole folder to Cloudflare Pages so `index.html` and `functions/api/quote.js` update together.
+Deploy the complete project, not index.html alone. After deployment, open `/quote?health=1`; it must return JSON before scanning.

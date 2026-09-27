@@ -22,7 +22,7 @@ header{position:sticky;top:0;z-index:40;background:rgba(8,13,23,.92);backdrop-fi
 </style>
 </head>
 <body>
-<header><div class="header-inner"><div class="brand"><div class="logo">AQ</div><div><h1>AQ V37.5 · 强势发现</h1><div class="sub">强股发现 × 买点质量 × 追高风险 × 强度变化</div></div></div><div class="version">Beta3 · P0.5.1</div></div></header>
+<header><div class="header-inner"><div class="brand"><div class="logo">AQ</div><div><h1>AQ V37.5 · 强势发现</h1><div class="sub">强股发现 × 买点质量 × 追高风险 × 强度变化</div></div></div><div class="version">Beta3 · P0.5.2</div></div></header>
 <div class="wrap">
   <section class="hero">
     <div class="hero-top"><div><div class="hero-title">实盘决策驾驶舱</div><div class="hero-desc">先判断“是不是强股”，再判断“现在能不能买”。强股 ≠ 当前可追。</div></div><div class="status-dot"><span class="dot"></span><span id="systemState">系统就绪</span></div></div>
@@ -67,10 +67,10 @@ header{position:sticky;top:0;z-index:40;background:rgba(8,13,23,.92);backdrop-fi
     <div class="row"><button class="purple" onclick="scanMarket()" id="scanBtn">🔍 扫描全市场</button><select id="refreshInterval"><option value="0">手动刷新</option><option value="15">15秒</option><option value="30">30秒</option><option value="60">1分钟</option><option value="180">3分钟</option></select><button onclick="toggleAuto()" id="autoBtn">开启自动</button></div>
     <div class="log" id="logBox">系统就绪。</div>
   </div>
-  <div class="footer">AQ V37.5 Beta3 P0.5.1 · 实时量价启发式模型 · 概率项用于相对比较，不代表保证收益</div>
+  <div class="footer">AQ V37.5 Beta3 P0.5.2 · 实时量价启发式模型 · 概率项用于相对比较，不代表保证收益</div>
 </div>
 <script>
-const API="/api/quote";
+const API="/quote";
 async function apiFetch(params=""){
   const q=params?"?"+params:"";
   const r=await fetch(API+q,{cache:"no-store",headers:{"accept":"application/json"}});
