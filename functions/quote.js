@@ -1,5 +1,5 @@
-// AQ V37.5 Strong Discovery Beta3 P0.4
-// 核心：AQ强度 + MQ买点质量 + HR追高风险 + RR盈亏比 + ΔAQ强度变化 + T+1交易约束
+// AQ V37.5 Strong Discovery Beta3 P0.5 Stable Data Patch
+// 核心：AQ强度 + MQ买点质量 + HR追高风险 + ΔAQ强度变化 + T+1交易约束
 const CORS={"content-type":"application/json; charset=utf-8","access-control-allow-origin":"*","access-control-allow-methods":"GET,OPTIONS","cache-control":"no-store"};
 const resp=(x,s=200,h={})=>new Response(JSON.stringify(x),{status:s,headers:{...CORS,...h}});
 const num=v=>{const n=Number(v);return Number.isFinite(n)?n:0};
@@ -19,32 +19,6 @@ function cleanName(v){return String(v||"").replace(/[\u0000-\u001f]/g,"").trim()
 function normalize(x){return{code:String(x.f12||""),name:cleanName(x.f14),price:num(x.f2),rise:num(x.f3),changeAmt:num(x.f4),volume:num(x.f5),amount:num(x.f6)/1e8,turnover:num(x.f8),vr:num(x.f10),high:num(x.f15),low:num(x.f16),open:num(x.f17),prevClose:num(x.f18),totalCap:num(x.f20)/1e8,floatCap:num(x.f21)/1e8,speed:num(x.f22),peStatic:num(x.f33),peDynamic:num(x.f34),peTTM:num(x.f35),eps:num(x.f37),revenue:num(x.f40),revGrowth:num(x.f41),profit:num(x.f42),profitGrowth:num(x.f43),grossMargin:num(x.f44),netMargin:num(x.f45),roe:num(x.f50),debtRatio:num(x.f51),mainNet:num(x.f62)/1e8,sector:String(x.f100||"")}}
 function allowed(x){return validCode(x.code)&&x.name&&x.price>0&&!/ST|退/.test(x.name)}
 function assessMarket(rows){const total=rows.length,up=rows.filter(r=>r.rise>0).length,down=rows.filter(r=>r.rise<0).length,flat=total-up-down,limitUp=rows.filter(r=>r.rise>=9.5).length,limitDown=rows.filter(r=>r.rise<=-9.5).length,totalAmount=rows.reduce((s,r)=>s+r.amount,0);const ratio=total?down/total:0;let risk=45;if(ratio>.8)risk=92;else if(ratio>.7)risk=82;else if(ratio>.6)risk=70;else if(ratio>.52)risk=58;else if(up>down*1.4)risk=35;if(limitDown>limitUp*2&&limitDown>20)risk+=6;risk=clamp(risk,0,100);const isExtreme=risk>=85,isPanic=risk>=92;return{risk,up,down,flat,limitUp,limitDown,totalAmount:Math.round(totalAmount),isExtreme,isPanic,status:risk>=85?"极度恐慌":risk>=70?"弱势下跌":risk>=55?"偏弱":risk<=40?"偏强":"震荡",advice:risk>=85?"🚨 风险极高：原则上空仓，只观察。":risk>=70?"⚠️ 弱势：只做极少数确认后的强势机会。":risk>=55?"📉 偏弱：控制仓位，优先回踩确认。":"市场可交易，但仍按买点纪律执行。"}}
-
-function chinaSession(){
-  const now=new Date(), cn=new Date(now.getTime()+8*3600000);
-  const day=cn.getUTCDay(), mins=cn.getUTCHours()*60+cn.getUTCMinutes();
-  const weekday=day>=1&&day<=5;
-  let mode="closed",label="收盘后 / 非交易时段";
-  if(weekday&&mins>=555&&mins<570){mode="auction";label="集合竞价";}
-  else if(weekday&&((mins>=570&&mins<690)||(mins>=780&&mins<900))){mode="live";label="盘中交易";}
-  else if(weekday&&mins>=690&&mins<780){mode="break";label="午间休市";}
-  return{mode,label,beijingTime:cn.toISOString().replace("Z","+08:00"),isTrading:mode==="live"};
-}
-function buildNextDayPool(picks,market){
-  return picks.map(x=>{
-    let closeScore=Math.round(x.aq*.36+x.nextDayProb*.24+x.threeDayProb*.12+(100-x.hr)*.10+clamp(x.pos*100,0,100)*.10+clamp(50+x.mainNet*8,20,90)*.08);
-    if(x.stage==="高位高潮")closeScore-=12;
-    if(x.rise>7)closeScore-=8;
-    if(x.hardVeto)closeScore-=10;
-    if(market.risk>=75)closeScore-=5;
-    closeScore=clamp(closeScore,0,100);
-    let nextPlan="观察",nextAction="次日开盘重新验证，不沿用昨日买入信号";
-    if(closeScore>=82&&x.aq>=86&&x.hr<=62){nextPlan="次日重点";nextAction="列入次日重点池；9:25后重算MQ/HR/IM，确认后才允许买入";}
-    else if(closeScore>=74){nextPlan="等回踩";nextAction="次日只等回踩承接或突破确认，不竞价追高";}
-    else if(x.aq>=84){nextPlan="观察";nextAction="股票强度尚可，但次日接力条件不足，先观察";}
-    return{...x,closeScore,nextPlan,nextAction};
-  }).filter(x=>x.closeScore>=68).sort((a,b)=>b.closeScore-a.closeScore||b.nextDayProb-a.nextDayProb).slice(0,10);
-}
 function grade(score){return score>=95?"S":score>=90?"A+":score>=85?"A":score>=75?"B":"C"}
 function strengthText(v){return v>=84?"极强":v>=74?"强":v>=62?"中":v>=50?"偏弱":"弱"}
 function calcMetrics(x,market){
@@ -86,18 +60,6 @@ function calcMetrics(x,market){
   if(x.rise>=1&&x.rise<=4.8)mq+=8; else if(x.rise>6.5)mq-=14; else if(x.rise>5.2)mq-=7;
   if(market.risk>=75)mq-=7; else if(market.risk<=40)mq+=3;
   if(fade)mq-=18;if(weakOpen)mq-=10;if(outflow)mq-=16;
-
-  // RR：当前价到“当日突破位/压力位”与有效防守位的盈亏比代理。
-  // 仅用实时行情可得字段计算，不伪造日K压力；若距离当日高点太近且防守较远，MQ自动降级。
-  const pressure=x.high>0?x.high:x.price*1.02;
-  const defense=Math.max(x.low>0?x.low:x.price*.97, x.open>0?Math.min(x.open,x.price*.992):x.price*.97);
-  const upsidePct=Math.max(0,(pressure-x.price)/x.price*100);
-  const downsidePct=Math.max(.35,(x.price-defense)/x.price*100);
-  const rrRaw=upsidePct/downsidePct;
-  const rrScore=clamp(Math.round(35+rrRaw*30),20,95);
-  if(rrRaw>=1.5)mq+=8; else if(rrRaw>=1.0)mq+=4; else if(rrRaw<.55)mq-=12; else if(rrRaw<.8)mq-=6;
-  // 临近当日高点但尚未有效突破时，不把“强”误判成“好买点”
-  if(upsidePct<.7&&x.rise>1.5)mq-=6;
   mq=clamp(Math.round(mq),0,100);
 
   // HR：追高/冲高回落风险，越高越危险
@@ -109,7 +71,6 @@ function calcMetrics(x,market){
   if(x.vr>4)hr+=7;if(x.turnover>14)hr+=7;
   if(x.mainNet<0)hr+=10;if(fade)hr+=18;if(weakOpen)hr+=10;if(outflow)hr+=16;
   if(market.risk>=75)hr+=8;
-  if(rrRaw<.55&&x.rise>1.5)hr+=8;
   hr=clamp(Math.round(hr),0,100);
 
   // 硬否决只针对买点，不把股票强度一票否决
@@ -138,7 +99,7 @@ function calcMetrics(x,market){
   else if(aq>=88&&mq<68){signal="不追";decision="强股但买点差";action="强度高但当前价格性价比差，等待新的买点";riskLevel=hr>=60?"高":"中";}
   if(market.risk>=85&&signal==="可进"){signal="等回踩";decision="极端行情降级";action="市场风险过高，即使强股也只等确认";riskLevel="高";}
 
-  return{...x,score:aq,aq,mq,hr,rr:+rrRaw.toFixed(2),rrScore,pressure:+pressure.toFixed(2),defense:+defense.toFixed(2),upsidePct:+upsidePct.toFixed(2),downsidePct:+downsidePct.toFixed(2),grade:grade(aq),signal,decision,action,riskLevel,hardVeto,buyQuality,chaseRisk,todayEdge,dayRange:+dayRange.toFixed(2),pullback:+pullback.toFixed(2),fromOpen:+fromOpen.toFixed(2),pos:+pos.toFixed(2),chase,nextDayProb,threeDayProb,nextDayStrength:strengthText(nextDayProb),threeDayStrength:strengthText(threeDayProb),buyHigh:+buyHigh.toFixed(2),buyLow:+buyLow.toFixed(2),cancelBuy:+cancelBuy.toFixed(2),stopLoss:+stopLoss.toFixed(2),target1:+(x.price*1.05).toFixed(2),target2:+(x.price*1.08).toFixed(2)};
+  return{...x,score:aq,aq,mq,hr,grade:grade(aq),signal,decision,action,riskLevel,hardVeto,buyQuality,chaseRisk,todayEdge,dayRange:+dayRange.toFixed(2),pullback:+pullback.toFixed(2),fromOpen:+fromOpen.toFixed(2),pos:+pos.toFixed(2),chase,nextDayProb,threeDayProb,nextDayStrength:strengthText(nextDayProb),threeDayStrength:strengthText(threeDayProb),buyHigh:+buyHigh.toFixed(2),buyLow:+buyLow.toFixed(2),cancelBuy:+cancelBuy.toFixed(2),stopLoss:+stopLoss.toFixed(2),target1:+(x.price*1.05).toFixed(2),target2:+(x.price*1.08).toFixed(2)};
 }
 async function fetchPage(p,pz=500){const fs="m:0+t:6,m:0+t:80,m:1+t:2";const path="/api/qt/clist/get?pn="+p+"&pz="+pz+"&po=1&np=1&fltt=2&invt=2&fid=f6&fs="+encodeURIComponent(fs)+"&fields="+FIELDS;const r=await east(path);return(r.j?.data?.diff||[]).map(normalize).filter(allowed)}
 function applyDynamics(picks,previous){
@@ -147,68 +108,37 @@ function applyDynamics(picks,previous){
     const p=prevMap.get(x.code);
     const aqDelta=p&&Number.isFinite(Number(p.aq??p.score))?x.aq-Number(p.aq??p.score):0;
     const flowDelta=p&&Number.isFinite(Number(p.mainNet))?x.mainNet-Number(p.mainNet):0;
-    // IM：启动动量。重点奖励“正在变强”，而不是已经涨得最高。
-    // 首次扫描没有历史快照时保持中性；连续刷新后才让ΔAQ/Δ资金产生明显权重。
-    const hasPrev=!!p;
-    const relStrength=x.rise-(previous?.market?.indexPct||0);
-    const im=clamp(Math.round(
-      42 + (hasPrev?aqDelta*5.5:0) + (hasPrev?flowDelta*7:0) + x.speed*5
-      + (relStrength>2?8:relStrength>1?4:0)
-      + (x.vr>=1.2&&x.vr<=3.5?5:0)
-      - (x.hr>=70?10:0) - (x.rise>7?8:0)
-    ),0,100);
+    const momentum=clamp(Math.round(50+aqDelta*5+flowDelta*8+x.speed*4),0,100);
     const trend=aqDelta>=4?"↑↑":aqDelta>=1?"↑":aqDelta<=-4?"↓↓":aqDelta<=-1?"↓":"→";
-
-    // 加速阶段：启动/首次加速优先；高位高潮即使AQ高，也降低可交易排序。
-    let stage="蓄势";
-    if(x.hr>=78||x.rise>=8||(x.rise>=6&&x.pos>=.95)) stage="高位高潮";
-    else if(x.rise>=4.8&&x.speed>.35) stage="二次加速";
-    else if(x.rise>=2&&x.rise<5.8&&im>=68&&x.hr<=58) stage="首次加速";
-    else if(x.rise>=.6&&x.rise<4&&im>=58&&x.mq>=68) stage="启动";
-    else if(x.pullback>=.35&&x.pullback<=1.5&&x.aq>=84) stage="强势回踩";
-    else if(x.aq>=86) stage="强势整理";
-
-    const stageBonus=stage==="启动"?8:stage==="首次加速"?7:stage==="强势回踩"?5:stage==="强势整理"?1:stage==="二次加速"?-3:stage==="高位高潮"?-12:0;
-    // Top排序：强度只是底座，MQ/低HR/IM/阶段共同决定“现在是否值得排前”。
-    const tradeScore=clamp(Math.round(x.aq*.36+x.mq*.28+(100-x.hr)*.14+im*.22+stageBonus),0,100);
-    let signal=x.signal,decision=x.decision,action=x.action,riskLevel=x.riskLevel;
-    if(stage==="高位高潮"&&!["不买","不追"].includes(signal)){signal="不追";decision="强股但禁止追";action="进入高位高潮阶段，等待回踩形成新承接后重评";riskLevel="高";}
-    else if(stage==="启动"&&x.aq>=82&&x.mq>=72&&x.hr<=52&&signal==="观察"){signal="启动关注";decision="启动捕捉";action="正在由普通候选转强，等待第一次突破/回踩确认";}
-    return{...x,signal,decision,action,riskLevel,aqDelta:+aqDelta.toFixed(1),flowDelta:+flowDelta.toFixed(2),momentum:im,im,stage,trend,tradeScore};
+    // Top排序不只看“现在多强”，更看买点质量、追高风险和正在变强的速度
+    const tradeScore=clamp(Math.round(x.aq*.44+x.mq*.32+(100-x.hr)*.16+momentum*.08),0,100);
+    return{...x,aqDelta:+aqDelta.toFixed(1),flowDelta:+flowDelta.toFixed(2),momentum,trend,tradeScore};
   });
 }
 async function scanMarket(context){
-  const started=Date.now();
-  // Cloudflare Pages/Workers 对单次请求的外部 subrequest 数量有限。
-  // 旧版 12~20 个并发分页 + 行情源重试，容易直接触发 Too many subrequests。
-  // 改为“大页优先”：通常 1 次请求覆盖沪深市场；若上游限制大页，再用最多 3 页兜底。
-  let pages=[];
-  try{
-    const first=await fetchPage(1,6000);
-    pages=[first];
-    if(first.length<2500){
-      const p2=await fetchPage(2,2000);
-      const p3=await fetchPage(3,2000);
-      pages=[first,p2,p3];
-    }
-  }catch(e){
-    // 兜底仍严格控制 subrequest 数量，避免扫描本身把 Worker 配额打满。
-    pages=[];
-    for(let p=1;p<=3;p++) pages.push(await fetchPage(p,2000));
+  const started=Date.now(),pages=[],errors=[];
+  // P0.5：固定少量大页顺序拉取。单页失败不再让整次 Promise.all 失败，避免瞬时上游异常直接 502。
+  for(let p=1;p<=3;p++){
+    try{const rows=await fetchPage(p,2000);if(rows.length)pages.push(rows);else errors.push(`第${p}页空数据`)}
+    catch(e){errors.push(`第${p}页:${e.message||"失败"}`)}
   }
-  const all=pages.flat(),unique=[...new Map(all.map(x=>[x.code,x])).values()],market=assessMarket(unique);
+  const all=pages.flat(),unique=[...new Map(all.map(x=>[x.code,x])).values()];
+  // 数据量过低时宁可使用最近成功快照，也不把残缺样本伪装成全市场实时扫描。
+  if(unique.length<1200)throw new Error(`实时行情覆盖不足(${unique.length}只)${errors.length?"；"+errors.join("；"):""}`);
+  // 市场情绪继续使用全部有效A股，避免800亿过滤扭曲涨跌家数/风险判断。
+  const market=assessMarket(unique);
   const previous=await kvGetJson(context,KV_MARKET_KEY);
-  let picks=unique.map(x=>calcMetrics(x,market)).filter(Boolean);
+  // 用户规则：总市值>800亿元不进入选股池；市值缺失/异常也不参与推荐。
+  const eligible=unique.filter(x=>x.totalCap>0&&x.totalCap<=800);
+  let picks=eligible.map(x=>calcMetrics(x,market)).filter(Boolean);
   picks=applyDynamics(picks,previous).sort((a,b)=>b.tradeScore-a.tradeScore||b.momentum-a.momentum||b.aq-a.aq||b.mainNet-a.mainNet);
-  const session=chinaSession();
   const trade=picks.filter(x=>["可进","等回踩","突破确认"].includes(x.signal)&&!x.hardVeto);
   const strong=trade.slice(0,8);
   const micro=picks.filter(x=>x.aq>=75&&!strong.some(s=>s.code===x.code)).slice(0,10);
-  const nextDayPool=buildNextDayPool(picks,market);
-  const body={ok:true,version:"AQ-V37.5-Beta3-P0.4-NEXTDAY-POOL-CF",time:new Date().toISOString(),session,market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),nextDayPool:nextDayPool.map((x,i)=>({...x,nextRank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,coverage:"沪深A股分批扫描（排除688/北交所/ST/退市）",probabilityNote:"盘中交易信号与收盘后次日重点池已分离；次日重点池仅用于下一交易日预选，开盘后必须重算MQ/HR/IM后才产生交易指令。",elapsedMs:Date.now()-started};
+  const body={ok:true,version:"AQ-V37.5-Beta3-P0.5",time:new Date().toISOString(),dataMode:errors.length?"degraded-live":"live",warning:errors.length?`部分行情页异常，已用有效实时数据完成扫描：${errors.join("；")}`:"",market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,eligibleScanned:eligible.length,excludedLargeCap:unique.filter(x=>x.totalCap>800).length,marketCapLimit:800,coverage:"沪深A股扫描（排除688/北交所/ST/退市；选股池总市值≤800亿元）",probabilityNote:"次日/3日为实时量价启发式估计；交易指令以AQ强度、MQ买点质量、HR追高风险及ΔAQ变化共同决定。",elapsedMs:Date.now()-started};
   context.waitUntil(kvPutJson(context,KV_MARKET_KEY,body,86400));
   return resp(body,200,{"cache-control":"public, max-age=30"});
 }
 async function queryQuotes(url,context){const codes=[...new Set((url.searchParams.get("codes")||"").split(",").map(x=>x.trim()).filter(validCode))].slice(0,50);if(!codes.length)return resp({ok:false,error:"没有有效代码"},400);const live=[];for(let i=0;i<codes.length;i+=10){const chunk=codes.slice(i,i+10),path="/api/qt/ulist.np/get?fltt=2&np=1&invt=2&fields="+FIELDS+"&secids="+encodeURIComponent(chunk.map(secid).join(","));const{j}=await east(path);live.push(...(j?.data?.diff||[]).map(normalize).filter(allowed))}const cached=await kvGetJson(context,KV_MARKET_KEY),market=cached?.market||{risk:50};let items=live.map(x=>calcMetrics(x,market)||({...x,score:0,aq:0,mq:0,hr:100,grade:"C",signal:"不买",decision:"不符合",action:"不参与"}));items=applyDynamics(items,cached);return resp({ok:true,time:new Date().toISOString(),count:items.length,items})}
 export async function onRequestOptions(){return resp({ok:true})}
-export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V37.5-Beta3-P0.4-NEXTDAY-POOL-CF",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){cached.stale=true;cached.warning=e.message;return resp(cached,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
+export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V37.5-Beta3-P0.5",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){const fallback={...cached,stale:true,dataMode:"cache",warning:`实时行情异常，当前显示最近成功快照：${e.message||"接口异常"}`};return resp(fallback,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
