@@ -1,4 +1,4 @@
-// AQ V37.5 Strong Discovery Beta3 P0.5.4 Multi-Source Market Data
+// AQ V37.5 Strong Discovery Beta3 P0.5.5 Intraday Fast Rescue
 // 核心：AQ强度 + MQ买点质量 + HR追高风险 + ΔAQ强度变化 + T+1交易约束
 const CORS={"content-type":"application/json; charset=utf-8","access-control-allow-origin":"*","access-control-allow-methods":"GET,OPTIONS","cache-control":"no-store"};
 const resp=(x,s=200,h={})=>new Response(JSON.stringify(x),{status:s,headers:{...CORS,...h}});
@@ -128,20 +128,46 @@ function applyDynamics(picks,previous){
     return{...x,aqDelta:+aqDelta.toFixed(1),flowDelta:+flowDelta.toFixed(2),momentum,trend,tradeScore};
   });
 }
+async function discoverEastFast(){
+  // 盘中救援：优先一次小型东方财富榜单请求，不再做全市场大分页。
+  // 只取成交活跃前 300 只作为“盘中强势发现池”，避免 Cloudflare 对大请求持续 502。
+  const fs="m:0+t:6,m:0+t:80,m:1+t:2";
+  const path="/api/qt/clist/get?pn=1&pz=300&po=1&np=1&ut="+EAST_UT+"&fltt=2&invt=2&fid=f6&fs="+encodeURIComponent(fs)+"&fields="+FIELDS;
+  const r=await east(path);
+  return (r.j?.data?.diff||[]).map(normalize).filter(allowed);
+}
 async function scanMarket(context){
   const started=Date.now(),errors=[];let unique=[],source="";
-  // P0.5.4：全市场优先使用新浪市场中心（与东方财富不同出口），东方财富只作兜底。
-  try{const rows=[];for(let p=1;p<=70;p++){const r=await sinaMarketPage(p,80);if(!r.length)break;rows.push(...r);if(r.length<80)break;}unique=[...new Map(rows.map(x=>[x.code,x])).values()];if(unique.length>=1200)source="Sina Market Center";else throw new Error(`新浪覆盖不足(${unique.length}只)`)}catch(e){errors.push("新浪:"+(e.message||"失败"));unique=[]}
-  if(unique.length<1200){try{const pages=[];for(let p=1;p<=12;p++){const r=await fetchPage(p,500);if(!r.length)break;pages.push(...r);if(r.length<500)break;}unique=[...new Map(pages.flat().map(x=>[x.code,x])).values()];if(unique.length>=1200)source="Eastmoney fallback";else throw new Error(`东方财富覆盖不足(${unique.length}只)`)}catch(e){errors.push("东方财富:"+(e.message||"失败"));}}
-  if(unique.length<1200)throw new Error(`多行情源覆盖不足(${unique.length}只)；${errors.join("；")}`);
+  // P0.5.5 盘中优先“轻请求”：避免 70 页新浪/12 页东财把 Cloudflare 出口拖入 502。
+  // 1) 先用东财单页活跃池；2) 失败再试新浪少量分页；3) 有 KV 则兜底。
+  try{
+    unique=[...new Map((await discoverEastFast()).map(x=>[x.code,x])).values()];
+    if(unique.length>=80) source="Eastmoney Fast Pool"; else throw new Error(`东财快速池不足(${unique.length}只)`);
+  }catch(e){errors.push("东财快速池:"+(e.message||"失败"));unique=[]}
+  if(unique.length<80){
+    try{
+      const rows=[];
+      for(let p=1;p<=4;p++){const r=await sinaMarketPage(p,80);if(!r.length)break;rows.push(...r);if(r.length<80)break;}
+      unique=[...new Map(rows.map(x=>[x.code,x])).values()];
+      if(unique.length>=80) source="Sina Fast Pool"; else throw new Error(`新浪快速池不足(${unique.length}只)`);
+    }catch(e){errors.push("新浪快速池:"+(e.message||"失败"));unique=[]}
+  }
+  if(unique.length<80){
+    const cached=await kvGetJson(context,KV_MARKET_KEY);
+    if(cached?.allPicks?.length){
+      return resp({...cached,stale:true,dataMode:"cache",version:"AQ-V37.5-Beta3-P0.5.5",warning:`盘中实时发现池暂不可用，显示最近成功快照；${errors.join("；")}`},200,{"cache-control":"no-store"});
+    }
+    throw new Error(`盘中行情池不可用(${unique.length}只)；${errors.join("；")}`);
+  }
   const market=assessMarket(unique),previous=await kvGetJson(context,KV_MARKET_KEY);
+  // 总市值字段缺失的新浪记录不进入 Top，避免绕过 800 亿硬过滤。
   const eligible=unique.filter(x=>x.totalCap>0&&x.totalCap<=800);
   let picks=eligible.map(x=>calcMetrics(x,market)).filter(Boolean);
   picks=applyDynamics(picks,previous).sort((a,b)=>b.tradeScore-a.tradeScore||b.momentum-a.momentum||b.aq-a.aq||b.mainNet-a.mainNet);
   const trade=picks.filter(x=>["可进","等回踩","突破确认"].includes(x.signal)&&!x.hardVeto),strong=trade.slice(0,8),micro=picks.filter(x=>x.aq>=75&&!strong.some(s=>s.code===x.code)).slice(0,10);
-  const body={ok:true,version:"AQ-V37.5-Beta3-P0.5.4",time:new Date().toISOString(),dataMode:errors.length?"fallback-live":"live",warning:errors.length?`主/备用源切换记录：${errors.join("；")}`:"",market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,eligibleScanned:eligible.length,excludedLargeCap:unique.filter(x=>x.totalCap>800).length,marketCapLimit:800,source,coverage:"沪深A股扫描（排除688/北交所/ST/退市；选股池总市值≤800亿元）",probabilityNote:"次日/3日为实时量价启发式估计；不同免费行情源字段完整度不同，页面显示当前实际来源。",elapsedMs:Date.now()-started};
-  context.waitUntil(kvPutJson(context,KV_MARKET_KEY,body,86400));return resp(body,200,{"cache-control":"public, max-age=30"});
+  const body={ok:true,version:"AQ-V37.5-Beta3-P0.5.5",time:new Date().toISOString(),dataMode:"intraday-fast-pool",warning:errors.length?`备用切换：${errors.join("；")}`:"",market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,eligibleScanned:eligible.length,excludedLargeCap:unique.filter(x=>x.totalCap>800).length,marketCapLimit:800,source,coverage:"盘中强势发现池（非全市场覆盖；排除688/北交所/ST/退市；总市值≤800亿元）",probabilityNote:"盘中救援模式仅用于强势发现与相对比较；恢复稳定全市场源后再切回全市场扫描。",elapsedMs:Date.now()-started};
+  context.waitUntil(kvPutJson(context,KV_MARKET_KEY,body,86400));return resp(body,200,{"cache-control":"public, max-age=20"});
 }
 async function queryQuotes(url,context){const codes=[...new Set((url.searchParams.get("codes")||"").split(",").map(x=>x.trim()).filter(validCode))].slice(0,50);if(!codes.length)return resp({ok:false,error:"没有有效代码"},400);let live=[],src="";try{live=await tencentQuotes(codes);if(!live.length)throw new Error("空数据");src="Tencent"}catch(e1){try{live=await sinaQuotes(codes);if(!live.length)throw new Error("空数据");src="Sina"}catch(e2){for(let i=0;i<codes.length;i+=10){const chunk=codes.slice(i,i+10),path="/api/qt/ulist.np/get?fltt=2&np=1&invt=2&fields="+FIELDS+"&secids="+encodeURIComponent(chunk.map(secid).join(","));const{j}=await east(path);live.push(...(j?.data?.diff||[]).map(normalize).filter(allowed))}src="Eastmoney"}}const cached=await kvGetJson(context,KV_MARKET_KEY),market=cached?.market||{risk:50};let items=live.map(x=>calcMetrics(x,market)||({...x,score:0,aq:0,mq:0,hr:100,grade:"C",signal:"不买",decision:"不符合",action:"不参与"}));items=applyDynamics(items,cached);return resp({ok:true,time:new Date().toISOString(),source:src,count:items.length,items})}
 export async function onRequestOptions(){return resp({ok:true})}
-export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V37.5-Beta3-P0.5.4",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("health")==="upstream"){let checks={};try{checks.tencent=(await tencentQuotes(["600000"])).length}catch(e){checks.tencent="ERR:"+e.message}try{checks.sina=(await sinaMarketPage(1,5)).length}catch(e){checks.sina="ERR:"+e.message}try{checks.eastmoney=(await fetchPage(1,5)).length}catch(e){checks.eastmoney="ERR:"+e.message}return resp({ok:true,service:"AQ-V37.5-Beta3-P0.5.4",checks,time:new Date().toISOString()});}if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){const fallback={...cached,stale:true,dataMode:"cache",warning:`实时行情异常，当前显示最近成功快照：${e.message||"接口异常"}`};return resp(fallback,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
+export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V37.5-Beta3-P0.5.5",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("health")==="upstream"){let checks={};try{checks.tencent=(await tencentQuotes(["600000"])).length}catch(e){checks.tencent="ERR:"+e.message}try{checks.sina=(await sinaMarketPage(1,5)).length}catch(e){checks.sina="ERR:"+e.message}try{checks.eastmoney=(await fetchPage(1,5)).length}catch(e){checks.eastmoney="ERR:"+e.message}return resp({ok:true,service:"AQ-V37.5-Beta3-P0.5.5",checks,time:new Date().toISOString()});}if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){const fallback={...cached,stale:true,dataMode:"cache",warning:`实时行情异常，当前显示最近成功快照：${e.message||"接口异常"}`};return resp(fallback,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
