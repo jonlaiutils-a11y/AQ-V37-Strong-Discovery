@@ -4,9 +4,9 @@ const CORS={"content-type":"application/json; charset=utf-8","access-control-all
 const resp=(x,s=200,h={})=>new Response(JSON.stringify(x),{status:s,headers:{...CORS,...h}});
 const num=v=>{const n=Number(v);return Number.isFinite(n)?n:0};
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-const validCode=c=>/^\d{6}$/.test(c)&&!c.startsWith("688")&&!c.startsWith("4")&&!c.startsWith("8");
+const validCode=c=>/^\d{6}$/.test(c)&&!c.startsWith("4")&&!c.startsWith("8");
 const secid=c=>(/^(5|6|9)/.test(c)?"1.":"0.")+c;
-const KV_MARKET_KEY="aq:v375:market:latest";
+const KV_MARKET_KEY="aq:v38:market:latest";
 function getKv(c){const kv=c?.env?.AQ_KV;return kv&&typeof kv.get==="function"&&typeof kv.put==="function"?kv:null}
 async function kvGetJson(c,k){const kv=getKv(c);if(!kv)return null;try{const r=await kv.get(k);return r?JSON.parse(r):null}catch{return null}}
 async function kvPutJson(c,k,v,ttl){const kv=getKv(c);if(!kv)return false;try{await kv.put(k,JSON.stringify(v),ttl?{expirationTtl:ttl}:undefined);return true}catch{return false}}
@@ -34,8 +34,20 @@ function allowed(x){return validCode(x.code)&&x.name&&x.price>0&&!/ST|退/.test(
 function assessMarket(rows){const total=rows.length,up=rows.filter(r=>r.rise>0).length,down=rows.filter(r=>r.rise<0).length,flat=total-up-down,limitUp=rows.filter(r=>r.rise>=9.5).length,limitDown=rows.filter(r=>r.rise<=-9.5).length,totalAmount=rows.reduce((s,r)=>s+r.amount,0);const ratio=total?down/total:0;let risk=45;if(ratio>.8)risk=92;else if(ratio>.7)risk=82;else if(ratio>.6)risk=70;else if(ratio>.52)risk=58;else if(up>down*1.4)risk=35;if(limitDown>limitUp*2&&limitDown>20)risk+=6;risk=clamp(risk,0,100);const isExtreme=risk>=85,isPanic=risk>=92;return{risk,up,down,flat,limitUp,limitDown,totalAmount:Math.round(totalAmount),isExtreme,isPanic,status:risk>=85?"极度恐慌":risk>=70?"弱势下跌":risk>=55?"偏弱":risk<=40?"偏强":"震荡",advice:risk>=85?"🚨 风险极高：原则上空仓，只观察。":risk>=70?"⚠️ 弱势：只做极少数确认后的强势机会。":risk>=55?"📉 偏弱：控制仓位，优先回踩确认。":"市场可交易，但仍按买点纪律执行。"}}
 function grade(score){return score>=95?"S":score>=90?"A+":score>=85?"A":score>=75?"B":"C"}
 function strengthText(v){return v>=84?"极强":v>=74?"强":v>=62?"中":v>=50?"偏弱":"弱"}
+// V38 P0: 涨停前发现与末端风险初筛。缺少历史K线时不伪称已确认主升浪早期。
+function limitPct(x){return /^(300|301|688|689)/.test(x.code)?20:10}
+function preLimitMetrics(x){
+  const lim=limitPct(x), distance=Math.max(0,lim-x.rise);
+  const pb=x.high>0?(x.high-x.price)/x.high*100:0;
+  const position=x.high>x.low?(x.price-x.low)/(x.high-x.low):.5;
+  const locked=x.rise>=lim-.12;
+  const lateRisk=clamp(Math.round(12+(x.rise>lim*.65?17:0)+(x.rise>lim*.82?17:0)+(pb>1.8?18:0)+(x.turnover>18?12:0)+(x.vr>5?9:0)+(position<.48?15:0)),0,100);
+  const impulse=clamp(Math.round(25+Math.max(0,x.rise)*5+Math.min(3,x.vr)*8+Math.min(12,x.turnover)*1.2+(position>.68?12:0)-(pb>1.8?14:0)),0,100);
+  const status=locked?'已涨停·仅观察':lateRisk>=65?'末端风险·谨慎':impulse>=70?'涨停前强势候选':'启动观察';
+  return {limitPct:lim,limitDistance:+distance.toFixed(2),limitLocked:locked,lateRisk,preLimitScore:impulse,discoveryStatus:status,historyVerified:false};
+}
 function calcMetrics(x,market){
-  if(x.amount<0.6||x.turnover>28||x.vr>12||x.rise<-2||x.rise>9.5)return null;
+  if(x.amount<0.6||x.turnover>28||x.vr>12||x.rise<-2)return null;
   const dayRange=x.high>x.low?(x.high-x.low)/x.low*100:0;
   const pullback=x.high>0?(x.high-x.price)/x.high*100:0;
   const fromOpen=x.open>0?(x.price-x.open)/x.open*100:0;
@@ -112,7 +124,7 @@ function calcMetrics(x,market){
   else if(aq>=88&&mq<68){signal="不追";decision="强股但买点差";action="强度高但当前价格性价比差，等待新的买点";riskLevel=hr>=60?"高":"中";}
   if(market.risk>=85&&signal==="可进"){signal="等回踩";decision="极端行情降级";action="市场风险过高，即使强股也只等确认";riskLevel="高";}
 
-  return{...x,score:aq,aq,mq,hr,grade:grade(aq),signal,decision,action,riskLevel,hardVeto,buyQuality,chaseRisk,todayEdge,dayRange:+dayRange.toFixed(2),pullback:+pullback.toFixed(2),fromOpen:+fromOpen.toFixed(2),pos:+pos.toFixed(2),chase,nextDayProb,threeDayProb,nextDayStrength:strengthText(nextDayProb),threeDayStrength:strengthText(threeDayProb),buyHigh:+buyHigh.toFixed(2),buyLow:+buyLow.toFixed(2),cancelBuy:+cancelBuy.toFixed(2),stopLoss:+stopLoss.toFixed(2),target1:+(x.price*1.05).toFixed(2),target2:+(x.price*1.08).toFixed(2)};
+  return{...x,...preLimitMetrics(x),score:aq,aq,mq,hr,grade:grade(aq),signal,decision,action,riskLevel,hardVeto,buyQuality,chaseRisk,todayEdge,dayRange:+dayRange.toFixed(2),pullback:+pullback.toFixed(2),fromOpen:+fromOpen.toFixed(2),pos:+pos.toFixed(2),chase,nextDayProb,threeDayProb,nextDayStrength:strengthText(nextDayProb),threeDayStrength:strengthText(threeDayProb),buyHigh:+buyHigh.toFixed(2),buyLow:+buyLow.toFixed(2),cancelBuy:+cancelBuy.toFixed(2),stopLoss:+stopLoss.toFixed(2),target1:+(x.price*1.05).toFixed(2),target2:+(x.price*1.08).toFixed(2)};
 }
 async function fetchPage(p,pz=500){const fs="m:0+t:6,m:0+t:80,m:1+t:2";const path="/api/qt/clist/get?pn="+p+"&pz="+pz+"&po=1&np=1&ut="+EAST_UT+"&fltt=2&invt=2&fid=f6&fs="+encodeURIComponent(fs)+"&fields="+FIELDS;const r=await east(path);return(r.j?.data?.diff||[]).map(normalize).filter(allowed)}
 function applyDynamics(picks,previous){
@@ -124,7 +136,7 @@ function applyDynamics(picks,previous){
     const momentum=clamp(Math.round(50+aqDelta*5+flowDelta*8+x.speed*4),0,100);
     const trend=aqDelta>=4?"↑↑":aqDelta>=1?"↑":aqDelta<=-4?"↓↓":aqDelta<=-1?"↓":"→";
     // Top排序不只看“现在多强”，更看买点质量、追高风险和正在变强的速度
-    const tradeScore=clamp(Math.round(x.aq*.44+x.mq*.32+(100-x.hr)*.16+momentum*.08),0,100);
+    const tradeScore=clamp(Math.round(x.preLimitScore*.60+(100-x.lateRisk)*.25+x.aq*.15),0,100);
     return{...x,aqDelta:+aqDelta.toFixed(1),flowDelta:+flowDelta.toFixed(2),momentum,trend,tradeScore};
   });
 }
@@ -141,16 +153,17 @@ async function scanMarket(context){
   // P0.5.7 数据优先：新浪作为主发现源，东财只作补充，避免单一 502 拖垮扫描。
   // 分页去重，连续两页无新增即停止，控制 Cloudflare 子请求数量。
   try{
-    const rows=[];let noNew=0,lastCount=0;
-    for(let p=1;p<=20;p++){
-      const r=await sinaMarketPage(p,100);
-      if(!r.length){noNew++; if(noNew>=2)break; continue}
-      rows.push(...r);
-      const now=new Set(rows.map(x=>x.code)).size;
-      if(now<=lastCount)noNew++;else noNew=0;
-      lastCount=now;
-      if(noNew>=2)break;
+    // 并发拉取前12页，降低串行网络等待；每页失败不拖垮整个扫描。
+    const pages=Array.from({length:12},(_,i)=>i+1);
+    const batches=[];
+    for(let i=0;i<pages.length;i+=4){
+      const results=await Promise.allSettled(pages.slice(i,i+4).map(pg=>sinaMarketPage(pg,100)));
+      for(let j=0;j<results.length;j++){
+        if(results[j].status==="fulfilled") batches.push(...results[j].value);
+        else errors.push(`新浪第${pages[i+j]}页失败`);
+      }
     }
+    const rows=batches;
     unique=[...new Map(rows.map(x=>[x.code,x])).values()];
     if(unique.length>=40){source="Sina";sourceDetail.push(`新浪${unique.length}只`)}
     else throw new Error(`新浪行情池不足(${unique.length}只)`);
@@ -169,7 +182,7 @@ async function scanMarket(context){
     const cached=await kvGetJson(context,KV_MARKET_KEY);
     if(cached?.allPicks?.length){
       const cacheTime=Date.parse(cached.time||0),ageSec=cacheTime?Math.max(0,Math.round((Date.now()-cacheTime)/1000)):null;
-      return resp({...cached,stale:true,dataMode:"cache",version:"AQ-V37.5-Beta3-P0.5.7",dataAgeSec:ageSec,liveEligible:false,warning:`实时行情暂不可用，显示最近成功快照；${errors.join("；")}`},200,{"cache-control":"no-store"});
+      return resp({...cached,stale:true,dataMode:"cache",version:"AQ-V38-P0.1-LiveFeed",dataAgeSec:ageSec,liveEligible:false,warning:`实时行情暂不可用，显示最近成功快照；${errors.join("；")}`},200,{"cache-control":"no-store"});
     }
     throw new Error(`实时行情不可用(${unique.length}只)；${errors.join("；")}`);
   }
@@ -180,10 +193,10 @@ async function scanMarket(context){
   const liveEligible=unique.length>=80;
   // 覆盖不足时不输出“可进”；仍可显示观察池，避免把小样本误当全市场。
   if(!liveEligible){picks=picks.map(x=>({...x,signal:x.signal==="可进"?"观察":x.signal,action:x.action==="买入"?"等待数据覆盖":x.action}))}
-  const trade=picks.filter(x=>liveEligible&&["可进","等回踩","突破确认"].includes(x.signal)&&!x.hardVeto),strong=trade.slice(0,8),micro=picks.filter(x=>x.aq>=75&&!strong.some(s=>s.code===x.code)).slice(0,10);
-  const body={ok:true,version:"AQ-V37.5-Beta3-P0.5.7",time:new Date().toISOString(),dataMode:"live",stale:false,dataAgeSec:0,liveEligible,warning:errors.length?`备用源状态：${errors.join("；")}`:"",market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,eligibleScanned:eligible.length,excludedLargeCap:0,marketCapLimit:null,source,sourceDetail,coverage:`有效实时行情 ${unique.length}只（非全A完整覆盖；不设市值上限）`,probabilityNote:"实时数据优先；覆盖不足或缓存状态不输出可进信号。",elapsedMs:Date.now()-started};
+  const trade=picks.filter(x=>!x.limitLocked&&x.lateRisk<65&&x.preLimitScore>=55),strong=trade.slice(0,10),micro=picks.filter(x=>!x.limitLocked&&x.aq>=75&&!strong.some(s=>s.code===x.code)).slice(0,10);
+  const body={ok:true,version:"AQ-V38-P0.1-LiveFeed",time:new Date().toISOString(),dataMode:"live",stale:false,dataAgeSec:0,liveEligible,warning:errors.length?`备用源状态：${errors.join("；")}`:"",market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,eligibleScanned:eligible.length,excludedLargeCap:0,marketCapLimit:null,source,sourceDetail,quoteTimestamp:new Date().toISOString(),coverage:`有效实时行情 ${unique.length}只（非全A完整覆盖；不设市值上限；部分代码范围受行情源限制）`,probabilityNote:"强势评分不是涨停概率；未接入历史K线，不具备末端风险完整识别能力。",elapsedMs:Date.now()-started};
   context.waitUntil(kvPutJson(context,KV_MARKET_KEY,body,86400));return resp(body,200,{"cache-control":"public, max-age=15"});
 }
 async function queryQuotes(url,context){const codes=[...new Set((url.searchParams.get("codes")||"").split(",").map(x=>x.trim()).filter(validCode))].slice(0,50);if(!codes.length)return resp({ok:false,error:"没有有效代码"},400);let live=[],src="";try{live=await tencentQuotes(codes);if(!live.length)throw new Error("空数据");src="Tencent"}catch(e1){try{live=await sinaQuotes(codes);if(!live.length)throw new Error("空数据");src="Sina"}catch(e2){for(let i=0;i<codes.length;i+=10){const chunk=codes.slice(i,i+10),path="/api/qt/ulist.np/get?fltt=2&np=1&invt=2&fields="+FIELDS+"&secids="+encodeURIComponent(chunk.map(secid).join(","));const{j}=await east(path);live.push(...(j?.data?.diff||[]).map(normalize).filter(allowed))}src="Eastmoney"}}const cached=await kvGetJson(context,KV_MARKET_KEY),market=cached?.market||{risk:50};let items=live.map(x=>calcMetrics(x,market)||({...x,score:0,aq:0,mq:0,hr:100,grade:"C",signal:"不买",decision:"不符合",action:"不参与"}));items=applyDynamics(items,cached);return resp({ok:true,time:new Date().toISOString(),source:src,count:items.length,items})}
 export async function onRequestOptions(){return resp({ok:true})}
-export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V37.5-Beta3-P0.5.7",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("health")==="upstream"){let checks={};try{checks.tencent=(await tencentQuotes(["600000"])).length}catch(e){checks.tencent="ERR:"+e.message}try{checks.sina=(await sinaMarketPage(1,5)).length}catch(e){checks.sina="ERR:"+e.message}try{checks.eastmoney=(await fetchPage(1,5)).length}catch(e){checks.eastmoney="ERR:"+e.message}return resp({ok:true,service:"AQ-V37.5-Beta3-P0.5.7",checks,time:new Date().toISOString()});}if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){const fallback={...cached,stale:true,dataMode:"cache",warning:`实时行情异常，当前显示最近成功快照：${e.message||"接口异常"}`};return resp(fallback,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
+export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V38-P0.1-LiveFeed",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("health")==="upstream"){let checks={};try{checks.tencent=(await tencentQuotes(["600000"])).length}catch(e){checks.tencent="ERR:"+e.message}try{checks.sina=(await sinaMarketPage(1,5)).length}catch(e){checks.sina="ERR:"+e.message}try{checks.eastmoney=(await fetchPage(1,5)).length}catch(e){checks.eastmoney="ERR:"+e.message}return resp({ok:true,service:"AQ-V38-P0.1-LiveFeed",checks,time:new Date().toISOString()});}if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){const fallback={...cached,stale:true,dataMode:"cache",warning:`实时行情异常，当前显示最近成功快照：${e.message||"接口异常"}`};return resp(fallback,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
