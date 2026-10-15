@@ -154,15 +154,23 @@ async function scanMarket(context){
   // 分页去重，连续两页无新增即停止，控制 Cloudflare 子请求数量。
   try{
     // 并发拉取前12页，降低串行网络等待；每页失败不拖垮整个扫描。
-    const pages=Array.from({length:12},(_,i)=>i+1);
-    const batches=[];
-    for(let i=0;i<pages.length;i+=4){
-      const results=await Promise.allSettled(pages.slice(i,i+4).map(pg=>sinaMarketPage(pg,100)));
+    // 扩展到最多60页；批量并发，部分失败仍保留成功页。
+    // 真实覆盖取决于上游是否允许分页及 Cloudflare 请求限额。
+    const pages=Array.from({length:60},(_,i)=>i+1);
+    const batches=[];let successPages=0,failedPages=0;
+    for(let i=0;i<pages.length;i+=12){
+      const results=await Promise.allSettled(pages.slice(i,i+12).map(pg=>sinaMarketPage(pg,100)));
+      let nonempty=0;
       for(let j=0;j<results.length;j++){
-        if(results[j].status==="fulfilled") batches.push(...results[j].value);
-        else errors.push(`新浪第${pages[i+j]}页失败`);
+        if(results[j].status==="fulfilled"){
+          const rows=results[j].value;
+          if(rows.length){batches.push(...rows);successPages++;nonempty++}
+        }else{failedPages++;errors.push(`新浪第${pages[i+j]}页失败`)}
       }
+      // 上游已经到末页时停止，避免无效请求。
+      if(nonempty===0)break;
     }
+    sourceDetail.push(`新浪成功页${successPages}、失败页${failedPages}`);
     const rows=batches;
     unique=[...new Map(rows.map(x=>[x.code,x])).values()];
     if(unique.length>=40){source="Sina";sourceDetail.push(`新浪${unique.length}只`)}
@@ -182,7 +190,7 @@ async function scanMarket(context){
     const cached=await kvGetJson(context,KV_MARKET_KEY);
     if(cached?.allPicks?.length){
       const cacheTime=Date.parse(cached.time||0),ageSec=cacheTime?Math.max(0,Math.round((Date.now()-cacheTime)/1000)):null;
-      return resp({...cached,stale:true,dataMode:"cache",version:"AQ-V38-P0.2-QuoteTest",dataAgeSec:ageSec,liveEligible:false,warning:`实时行情暂不可用，显示最近成功快照；${errors.join("；")}`},200,{"cache-control":"no-store"});
+      return resp({...cached,stale:true,dataMode:"cache",version:"AQ-V38-P0.3-CoverageFix",dataAgeSec:ageSec,liveEligible:false,warning:`实时行情暂不可用，显示最近成功快照；${errors.join("；")}`},200,{"cache-control":"no-store"});
     }
     throw new Error(`实时行情不可用(${unique.length}只)；${errors.join("；")}`);
   }
@@ -190,13 +198,13 @@ async function scanMarket(context){
   const market=assessMarket(unique),previous=await kvGetJson(context,KV_MARKET_KEY),eligible=unique;
   let picks=eligible.map(x=>calcMetrics(x,market)).filter(Boolean);
   picks=applyDynamics(picks,previous).sort((a,b)=>b.tradeScore-a.tradeScore||b.momentum-a.momentum||b.aq-a.aq||b.mainNet-a.mainNet);
-  const liveEligible=unique.length>=80; // minimum usable sample, NOT complete A-share market coverage
+  const liveEligible=unique.length>=3500; // minimum usable sample, NOT complete A-share market coverage
   // 覆盖不足时不输出“可进”；仍可显示观察池，避免把小样本误当全市场。
   if(!liveEligible){picks=picks.map(x=>({...x,signal:x.signal==="可进"?"观察":x.signal,action:x.action==="买入"?"等待数据覆盖":x.action}))}
   const trade=picks.filter(x=>!x.limitLocked&&x.lateRisk<65&&x.preLimitScore>=55),strong=trade.slice(0,10),micro=picks.filter(x=>!x.limitLocked&&x.aq>=75&&!strong.some(s=>s.code===x.code)).slice(0,10);
-  const body={ok:true,version:"AQ-V38-P0.2-QuoteTest",time:new Date().toISOString(),dataMode:"upstream_snapshot",stale:false,dataAgeSec:null,exchangeQuoteTimeVerified:false,fullMarketCoverage:false,liveEligible,warning:errors.length?`备用源状态：${errors.join("；")}`:"",market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,eligibleScanned:eligible.length,excludedLargeCap:0,marketCapLimit:null,source,sourceDetail,serverFetchTimestamp:new Date().toISOString(),quoteTimestamp:null,coverage:`有效实时行情 ${unique.length}只（非全A完整覆盖；不设市值上限；部分代码范围受行情源限制）`,probabilityNote:"强势评分不是涨停概率；未接入历史K线，不具备末端风险完整识别能力。",elapsedMs:Date.now()-started};
+  const body={ok:true,coverageComplete:unique.length>=4500,coverageRatioHint:"仅为已获取有效股票数；不代表全A股总数",version:"AQ-V38-P0.3-CoverageFix",time:new Date().toISOString(),dataMode:"upstream_snapshot",stale:false,dataAgeSec:null,exchangeQuoteTimeVerified:false,fullMarketCoverage:unique.length>=4500,liveEligible,warning:errors.length?`备用源状态：${errors.join("；")}`:"",market,strongContra:strong.map((x,i)=>({...x,rank:i+1})),microContra:micro.map((x,i)=>({...x,rank:i+1})),allPicks:picks.slice(0,40).map((x,i)=>({...x,rank:i+1})),scanned:unique.length,eligibleScanned:eligible.length,excludedLargeCap:0,marketCapLimit:null,source,sourceDetail,serverFetchTimestamp:new Date().toISOString(),quoteTimestamp:null,coverage:`有效实时行情 ${unique.length}只（非全A完整覆盖；不设市值上限；部分代码范围受行情源限制）`,probabilityNote:"强势评分不是涨停概率；未接入历史K线，不具备末端风险完整识别能力。",elapsedMs:Date.now()-started};
   context.waitUntil(kvPutJson(context,KV_MARKET_KEY,body,86400));return resp(body,200,{"cache-control":"public, max-age=15"});
 }
 async function queryQuotes(url,context){const codes=[...new Set((url.searchParams.get("codes")||"").split(",").map(x=>x.trim()).filter(validCode))].slice(0,50);if(!codes.length)return resp({ok:false,error:"没有有效代码"},400);let live=[],src="";try{live=await tencentQuotes(codes);if(!live.length)throw new Error("空数据");src="Tencent"}catch(e1){try{live=await sinaQuotes(codes);if(!live.length)throw new Error("空数据");src="Sina"}catch(e2){for(let i=0;i<codes.length;i+=10){const chunk=codes.slice(i,i+10),path="/api/qt/ulist.np/get?fltt=2&np=1&invt=2&fields="+FIELDS+"&secids="+encodeURIComponent(chunk.map(secid).join(","));const{j}=await east(path);live.push(...(j?.data?.diff||[]).map(normalize).filter(allowed))}src="Eastmoney"}}const cached=await kvGetJson(context,KV_MARKET_KEY),market=cached?.market||{risk:50};let items=live.map(x=>calcMetrics(x,market)||({...x,score:0,aq:0,mq:0,hr:100,grade:"C",signal:"不买",decision:"不符合",action:"不参与"}));items=applyDynamics(items,cached);return resp({ok:true,time:new Date().toISOString(),source:src,exchangeQuoteTimeVerified:false,count:items.length,items})}
 export async function onRequestOptions(){return resp({ok:true})}
-export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V38-P0.2-QuoteTest",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("health")==="upstream"){let checks={};try{checks.tencent=(await tencentQuotes(["600000"])).length}catch(e){checks.tencent="ERR:"+e.message}try{checks.sina=(await sinaMarketPage(1,5)).length}catch(e){checks.sina="ERR:"+e.message}try{checks.eastmoney=(await fetchPage(1,5)).length}catch(e){checks.eastmoney="ERR:"+e.message}return resp({ok:true,service:"AQ-V38-P0.2-QuoteTest",checks,time:new Date().toISOString()});}if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){const fallback={...cached,stale:true,dataMode:"cache",warning:`实时行情异常，当前显示最近成功快照：${e.message||"接口异常"}`};return resp(fallback,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
+export async function onRequestGet(context){const url=new URL(context.request.url);try{if(url.searchParams.get("health")==="1")return resp({ok:true,service:"AQ-V38-P0.3-CoverageFix",time:new Date().toISOString(),kvEnabled:!!getKv(context)});if(url.searchParams.get("health")==="upstream"){let checks={};try{checks.tencent=(await tencentQuotes(["600000"])).length}catch(e){checks.tencent="ERR:"+e.message}try{checks.sina=(await sinaMarketPage(1,5)).length}catch(e){checks.sina="ERR:"+e.message}try{checks.eastmoney=(await fetchPage(1,5)).length}catch(e){checks.eastmoney="ERR:"+e.message}return resp({ok:true,service:"AQ-V38-P0.3-CoverageFix",checks,time:new Date().toISOString()});}if(url.searchParams.get("mode")==="scan")return await scanMarket(context);return await queryQuotes(url,context)}catch(e){const cached=await kvGetJson(context,KV_MARKET_KEY);if(cached){const fallback={...cached,stale:true,dataMode:"cache",warning:`实时行情异常，当前显示最近成功快照：${e.message||"接口异常"}`};return resp(fallback,200,{"cache-control":"no-store"})}return resp({ok:false,error:e.message||"接口异常"},502)}}
